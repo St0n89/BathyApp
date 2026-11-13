@@ -1,14 +1,13 @@
 plugins {
     id("org.jetbrains.kotlin.jvm")
-    kotlin {
-        compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
-repositories {
-    mavenCentral()
-}
+
 dependencies {
     testImplementation(kotlin("test"))
 }

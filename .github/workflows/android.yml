@@ -87,13 +87,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          sed -n '/FAILURE: Build failed/,$p' gradle_output.txt > /tmp/fail.txt
+          [ -s /tmp/fail.txt ] || tail -c 60000 gradle_output.txt > /tmp/fail.txt
           {
             echo "CI build failed."
             echo ""
             echo "Run: $RUN_URL"
             echo ""
             echo '````'
-            tail -n 150 gradle_output.txt
+            cat /tmp/fail.txt
             echo '````'
           } > /tmp/issue_body.md
           jq -n --rawfile body /tmp/issue_body.md \
