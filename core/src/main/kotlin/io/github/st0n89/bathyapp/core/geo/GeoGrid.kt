@@ -36,7 +36,8 @@ class GeoGrid(
     /** Latitude of the centre of row [j] (row 0 = north). */
     fun latOf(j: Int): Double = north - (j + 0.5) * dy
 
-    operator fun get(col: Int, row: Int): Float = values[row * nx + col]
+    /** Row-major cell access: [row] is the north-first row, [col] the west-first column. */
+    operator fun get(row: Int, col: Int): Float = values[row * nx + col]
 
     /** Bilinear sample at geographic coordinates; NaN outside or on nodata. */
     fun sample(lon: Double, lat: Double): Float {
@@ -49,10 +50,10 @@ class GeoGrid(
         val j0 = floor(y).toInt().coerceAtMost(ny - 2)
         val tx = x - i0
         val ty = y - j0
-        val v00 = get(i0, j0)
-        val v10 = get(i0 + 1, j0)
-        val v01 = get(i0, j0 + 1)
-        val v11 = get(i0 + 1, j0 + 1)
+        val v00 = get(j0, i0)
+        val v10 = get(j0, i0 + 1)
+        val v01 = get(j0 + 1, i0)
+        val v11 = get(j0 + 1, i0 + 1)
         if (v00.isNaN() || v10.isNaN() || v01.isNaN() || v11.isNaN()) return Float.NaN
         val top = v00 + (v10 - v00) * tx
         val bot = v01 + (v11 - v01) * tx

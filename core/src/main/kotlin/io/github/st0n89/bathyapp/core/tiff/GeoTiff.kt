@@ -444,7 +444,7 @@ object GeoTiffWriter {
         val blobOffsets = LongArray(n)
         for (i in 0 until n) {
             val e = entries[i]
-            if (e.blob != null) {
+            if (e.blob != null && e.blob.size > 4) {
                 blobOffsets[i] = cursor
                 cursor += (e.blob.size + 1) / 2 * 2
             }
@@ -474,7 +474,13 @@ object GeoTiffWriter {
             le16(e.type)
             le32(count.toLong())
             if (e.blob != null) {
-                le32(blobOffsets[i])
+                if (e.blob.size <= 4) {
+                    // TIFF stores values that fit the 4-byte field inline
+                    bo.write(e.blob)
+                    repeat(4 - e.blob.size) { bo.write(0) }
+                } else {
+                    le32(blobOffsets[i])
+                }
             } else {
                 val v = e.longValues!!
                 if (e.type == 3 && v.size == 1) {

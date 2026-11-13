@@ -72,7 +72,7 @@ class GeoTiffTest {
                 for (r in 0 until th) for (c in 0 until tw) {
                     val gx = tx * tw + c
                     val gy = ty * th + r
-                    if (gx < nx && gy < ny) tile.putFloat(vals[gy * nx + gx])
+                    tile.putFloat(if (gx < nx && gy < ny) vals[gy * nx + gx] else 0f)
                 }
                 tiles.add(tile.array().copyOfRange(0, tw * th * 4))
             }
@@ -247,7 +247,12 @@ class GeoTiffTest {
         assertEquals(10.0 + nx * 0.5, grid.east, 1e-9)
     }
 
-    /** TIFF-flavoured LZW encoder (MSB-first, early change) for tests. */
+    /**
+     * TIFF-flavoured LZW encoder (MSB-first) for tests. The encoder's table counter
+     * runs one entry ahead of the decoder's, so - matching libtiff's LZWEncode -
+     * the code width switches when nextCode reaches (1 shl codeWidth). The
+     * "early change" rule belongs to the decoder side (GeoTiffReader.lzwDecode).
+     */
     private fun lzwEncode(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         val prefixTable = HashMap<Long, Int>(4096)
@@ -278,7 +283,7 @@ class GeoTiffTest {
             } else {
                 emit(w)
                 prefixTable[key(w, c)] = nextCode++
-                if (nextCode == (1 shl codeWidth) - 1 && codeWidth < 12) codeWidth++
+                if (nextCode == (1 shl codeWidth) && codeWidth < 12) codeWidth++
                 w = c
             }
             i++

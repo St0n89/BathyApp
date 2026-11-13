@@ -65,7 +65,8 @@ class ProfilerTest {
         val text = out.toString("UTF-8")
         assertTrue(text.startsWith("# BathyApp grid export"))
         assertTrue(text.contains("lon,lat,elevation_m"))
-        assertTrue(text.contains("8.050000,53.950000,-139.600000"))
+        // -139.6 is not exactly representable in float32: -139.6f -> -139.60000610351562
+        assertTrue(text.contains("8.050000,53.950000,-139.600006"))
 
         val pts = listOf(
             ProfilePoint(0.0, 10.0, 50.0, -104.0),
