@@ -3,7 +3,6 @@ package io.github.st0n89.bathyapp.core
 import io.github.st0n89.bathyapp.core.data.FileChannelSource
 import io.github.st0n89.bathyapp.core.nc3.NcGrid
 import io.github.st0n89.bathyapp.core.nc3.NetCdf3File
-import io.github.st0n89.bathyapp.core.nc3.Nc3Writer
 import java.io.File
 import java.io.RandomAccessFile
 import kotlin.test.Test
@@ -152,7 +151,7 @@ class NetCdf3Test {
     @Test
     fun rejectsNonNetcdfFiles() {
         val f = tempFile()
-        f.writeBytes("this is not a netcdf file at all")
+        f.writeText("this is not a netcdf file at all")
         assertFailsWith<IllegalArgumentException> { open(f).close() }
     }
 

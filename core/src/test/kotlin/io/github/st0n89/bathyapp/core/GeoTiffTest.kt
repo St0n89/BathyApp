@@ -265,7 +265,7 @@ class GeoTiffTest {
             }
         }
 
-        fun key(prefix: Int, suffix: Int) = (prefix.toLong() shl 8) or suffix
+        fun key(prefix: Int, suffix: Int) = (prefix.toLong() shl 8) or suffix.toLong()
 
         var w = data[0].toInt() and 0xFF
         var i = 1
