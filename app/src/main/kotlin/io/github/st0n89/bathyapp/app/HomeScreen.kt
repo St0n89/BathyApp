@@ -47,7 +47,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     ) {
         Text("BathyApp", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Tiefenprofile und Gitter aus EMODnet (online) oder GEBCO-Dateien (offline).",
+            "Tiefenprofile und Gitter aus EMODnet (online, Europa), GEBCO 2026 (online, weltweit) oder lokalen Dateien.",
             style = MaterialTheme.typography.bodyMedium,
         )
 
@@ -58,23 +58,34 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 label = { Text("EMODnet (online)") },
             )
             FilterChip(
+                selected = state.source == DataSource.GEBCO,
+                onClick = { vm.setSource(DataSource.GEBCO) },
+                label = { Text("GEBCO (online)") },
+            )
+            FilterChip(
                 selected = state.source == DataSource.LOCAL_FILE,
                 onClick = { vm.setSource(DataSource.LOCAL_FILE) },
                 label = { Text("Datei (offline)") },
             )
         }
 
-        if (state.source == DataSource.EMODNET) {
-            OutlinedButton(onClick = { vm.setCoverageIndex(state.coverageIndex + 1) }) {
+        when (state.source) {
+            DataSource.EMODNET -> OutlinedButton(onClick = { vm.setCoverageIndex(state.coverageIndex + 1) }) {
                 val cov = EmodnetWcs.COVERAGES[state.coverageIndex]
                 Text("Datensatz: ${cov.label} (${cov.id})")
             }
-        } else {
-            OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
-                Text(if (state.localReady) "Andere Datei wählen" else "NetCDF/GeoTIFF wählen (.nc, .tif)")
-            }
-            if (state.localInfo != null) {
-                Text(state.localInfo, style = MaterialTheme.typography.bodySmall)
+            DataSource.GEBCO -> Text(
+                state.gebcoInfo
+                    ?: "Weltweite Abdeckung, GEBCO 2026, 15″. Der Server schneidet das Gebiet zu, das dauert einen Moment; große Gebiete brauchen länger (max. 14.400 deg²).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            DataSource.LOCAL_FILE -> {
+                OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
+                    Text(if (state.localReady) "Andere Datei wählen" else "NetCDF/GeoTIFF wählen (.nc, .tif)")
+                }
+                if (state.localInfo != null) {
+                    Text(state.localInfo, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
@@ -97,7 +108,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         if (state.loading) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator()
-                Text("Lade Daten …", modifier = Modifier.padding(top = 12.dp))
+                Text(state.loadingNote ?: "Lade Daten …", modifier = Modifier.padding(top = 12.dp))
             }
         }
         state.error?.let {

@@ -1,17 +1,26 @@
 # BathyApp
 
 Android app for generating **bathymetric profiles and grids** from
-[EMODnet Bathymetry](https://emodnet.ec.europa.eu/en/bathymetry) (online, WCS) or
-**GEBCO** grids (offline, NetCDF / GeoTIFF). Pure Kotlin, Jetpack Compose, zero
-bathymetry libraries: the NetCDF-3 reader, GeoTIFF reader/writer, WCS client,
-profiler and exporters are all hand-written in `:core` (plain Kotlin/JVM,
-fully unit-tested).
+[EMODnet Bathymetry](https://emodnet.ec.europa.eu/en/bathymetry) (online, WCS),
+**GEBCO 2026** (online, worldwide) or **GEBCO** grids (offline, NetCDF /
+GeoTIFF). Pure Kotlin, Jetpack Compose, zero bathymetry libraries: the
+NetCDF-3 reader, GeoTIFF reader/writer, WCS client, GEBCO crop client, profiler
+and exporters are all hand-written in `:core` (plain Kotlin/JVM, fully
+unit-tested).
 
 ## Features
 
 - **EMODnet online mode**: downloads a coverage tile for any bounding box via
   the EMODnet Bathymetry WCS 2.0.1 endpoint (`ows.emodnet-bathymetry.eu/wcs`),
   coverages selectable (`emodnet__mean`, 2016/2018/2020/2022 releases).
+  Coverage: European waters.
+- **GEBCO online mode**: worldwide coverage via the GEBCO 2026 grid
+  (15 arc-second). Requests a server-side crop for the entered bounding box
+  through `download.gebco.net`, polls until the crop is ready and reads the
+  returned NetCDF (CDF-1) with the built-in reader. The crop is cached in the
+  app cache dir with a 0.25° margin, so follow-up requests inside the cached
+  area need no network. Server limit: 14.400 deg² per request; large areas
+  take longer (progress note shown while waiting).
 - **Offline mode**: opens local bathymetry files directly on the device:
   - GEBCO NetCDF (**classic NetCDF-3, CDF-1/CDF-2**; NetCDF-4/HDF5 is rejected
     with a clear error message),
@@ -31,10 +40,12 @@ fully unit-tested).
 
 ## Usage
 
-1. Choose *EMODnet (online)* or *Datei (offline)*.
+1. Choose *EMODnet (online)*, *GEBCO (online)* or *Datei (offline)*.
 2. Enter the bounding box (west/east/south/north in degrees) and the target
    grid width in pixels (2..2048).
-3. *Gitter laden* fetches/builds the grid and shows the map.
+3. *Gitter laden* fetches/builds the grid and shows the map. In GEBCO mode the
+   first request waits for the server-side crop (status note shown); requests
+   inside an already-cached crop load instantly.
 4. Tap point A, then point B (further taps move B).
 5. *Profil* computes and shows the depth profile.
 6. *GeoTIFF / Gitter-CSV / Profil-CSV* export the current result.

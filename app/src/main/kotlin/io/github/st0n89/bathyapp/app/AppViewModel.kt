@@ -1,12 +1,14 @@
 package io.github.st0n89.bathyapp.app
 
+import android.app.Application
 import android.content.Context
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.st0n89.bathyapp.core.data.FileChannelSource
 import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.export.Exporters
+import io.github.st0n89.bathyapp.core.gebco.GebcoCrop
 import io.github.st0n89.bathyapp.core.geo.GeoGrid
 import io.github.st0n89.bathyapp.core.nc3.NcGrid
 import io.github.st0n89.bathyapp.core.nc3.NetCdf3File
@@ -27,7 +29,7 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 
-enum class DataSource { EMODNET, LOCAL_FILE }
+enum class DataSource { EMODNET, GEBCO, LOCAL_FILE }
 
 sealed interface AppScreen {
     data object Home : AppScreen
@@ -45,12 +47,14 @@ data class AppUiState(
     val north: String = "57.5",
     val widthPx: String = "600",
     val loading: Boolean = false,
+    val loadingNote: String? = null,
     val error: String? = null,
     val grid: GeoGrid? = null,
     val gridNote: String? = null,
     val localFileName: String? = null,
     val localInfo: String? = null,
     val localReady: Boolean = false,
+    val gebcoInfo: String? = null,
     val pointA: DoubleArray? = null,
     val pointB: DoubleArray? = null,
     val profile: List<ProfilePoint>? = null,
@@ -113,12 +117,17 @@ class LocalFileHandle constructor(
     }
 }
 
-class AppViewModel : ViewModel() {
+class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
 
     private var localHandle: LocalFileHandle? = null
+
+    /** Cached GEBCO online crop (NetCDF in the app cache dir). */
+    private var gebcoHandle: LocalFileHandle? = null
+    private var gebcoBounds: DoubleArray? = null
+    private var gebcoFile: File? = null
 
     private fun update(block: (AppUiState) -> AppUiState) {
         _state.value = block(_state.value)
@@ -193,6 +202,7 @@ class AppViewModel : ViewModel() {
                         val coverage = EmodnetWcs.COVERAGES[st.coverageIndex].id
                         EmodnetWcs.loadGrid(coverage, bbox[0], bbox[1], bbox[2], bbox[3], cols)
                     }
+                    DataSource.GEBCO -> loadGebcoGrid(bbox[0], bbox[1], bbox[2], bbox[3], cols)
                     DataSource.LOCAL_FILE -> {
                         val handle = localHandle ?: throw IllegalStateException("Keine Datei geladen")
                         handle.readSubgrid(bbox[0], bbox[1], bbox[2], bbox[3], cols)
@@ -200,17 +210,64 @@ class AppViewModel : ViewModel() {
                 }
                 val note = when (st.source) {
                     DataSource.EMODNET -> "EMODnet Bathymetry WCS (${EmodnetWcs.COVERAGES[st.coverageIndex].id})"
+                    DataSource.GEBCO -> _state.value.gebcoInfo ?: "GEBCO 2026 (online crop)"
                     DataSource.LOCAL_FILE -> "local file: ${_state.value.localFileName}"
                 } + ", " + Exporters.extentNote(grid)
                 _state.value = _state.value.copy(
-                    loading = false, grid = grid, gridNote = note,
+                    loading = false, loadingNote = null, grid = grid, gridNote = note,
                     screen = AppScreen.Map, pointA = null, pointB = null,
                     profile = null, profileStats = null,
                 )
             } catch (e: Exception) {
-                _state.value = _state.value.copy(loading = false, error = e.message ?: e.toString())
+                _state.value = _state.value.copy(loading = false, loadingNote = null, error = e.message ?: e.toString())
             }
         }
+    }
+
+    // ---------------- GEBCO online crop ----------------
+
+    /**
+     * Loads a grid from GEBCO 2026 (https://download.gebco.net). The first
+     * request asks the server to cut a crop for the bbox (+0.25° margin);
+     * the returned NetCDF is cached locally, so follow-up requests inside
+     * the cached area are served without any network access.
+     */
+    private fun loadGebcoGrid(west: Double, south: Double, east: Double, north: Double, cols: Int): GeoGrid {
+        val bounds = gebcoBounds
+        val cached = gebcoHandle
+        if (cached != null && bounds != null &&
+            west >= bounds[0] && east <= bounds[2] && south >= bounds[1] && north <= bounds[3]
+        ) return cached.readSubgrid(west, south, east, north, cols)
+
+        update { it.copy(loadingNote = "Frage GEBCO-Crop an (Server braucht einen Moment) …") }
+        val margin = 0.25
+        val cw = (west - margin).coerceIn(-180.0, 180.0)
+        val ce = (east + margin).coerceIn(-180.0, 180.0)
+        val cs = (south - margin).coerceIn(-90.0, 90.0)
+        val cn = (north + margin).coerceIn(-90.0, 90.0)
+        val (name, ncBytes) = GebcoCrop.downloadNetCdf(cw, cs, ce, cn, onStatus = { note ->
+            update { s -> s.copy(loadingNote = note) }
+        })
+
+        // replace the previous crop cache
+        val oldFile = gebcoFile
+        gebcoHandle?.close()
+        oldFile?.delete()
+
+        val cache = File(getApplication<Application>().cacheDir, "gebco_crop.nc")
+        FileOutputStream(cache).use { it.write(ncBytes) }
+        val nc = NetCdf3File(FileChannelSource(RandomAccessFile(cache, "r").channel))
+        val ncGrid = NcGrid.open(nc)
+        gebcoHandle = LocalFileHandle(nc, ncGrid, null, null)
+        gebcoBounds = doubleArrayOf(ncGrid.west, ncGrid.south, ncGrid.east, ncGrid.north)
+        gebcoFile = cache
+        update {
+            it.copy(
+                gebcoInfo = "GEBCO 2026 online crop ($name), " +
+                    "${fmt(ncGrid.west)}°…${fmt(ncGrid.east)}°E, ${fmt(ncGrid.south)}°…${fmt(ncGrid.north)}°N",
+            )
+        }
+        return gebcoHandle!!.readSubgrid(west, south, east, north, cols)
     }
 
     // ---------------- local files ----------------
@@ -346,5 +403,6 @@ class AppViewModel : ViewModel() {
 
     override fun onCleared() {
         localHandle?.close()
+        gebcoHandle?.close()
     }
 }
