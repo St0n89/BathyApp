@@ -58,7 +58,7 @@ data class AppUiState(
 )
 
 /** Handle to a local GEBCO-style NetCDF or GeoTIFF bathymetry file. */
-class LocalFileHandle private constructor(
+class LocalFileHandle constructor(
     private val ncFile: NetCdf3File?,
     private val ncGrid: NcGrid?,
     private val tiffGrid: GeoGrid?,
