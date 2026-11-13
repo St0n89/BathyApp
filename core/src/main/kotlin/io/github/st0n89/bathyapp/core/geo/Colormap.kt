@@ -1,5 +1,6 @@
 package io.github.st0n89.bathyapp.core.geo
 
+import kotlin.math.max
 import kotlin.math.min
 
 /**
