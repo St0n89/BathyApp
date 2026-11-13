@@ -1,0 +1,75 @@
+name: android-ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.9"
+
+      - name: Set up release keystore
+        env:
+          BATHY_KEYSTORE_B64: ${{ secrets.BATHY_KEYSTORE_B64 }}
+          BATHY_KEYSTORE_PASSWORD: ${{ secrets.BATHY_KEYSTORE_PASSWORD }}
+          BATHY_KEY_ALIAS: ${{ secrets.BATHY_KEY_ALIAS }}
+          BATHY_KEY_PASSWORD: ${{ secrets.BATHY_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$BATHY_KEYSTORE_B64" ]; then
+            echo "Decoding provided release keystore"
+            echo "$BATHY_KEYSTORE_B64" | base64 -d > "$HOME/bathyapp-release.keystore"
+            echo "BATHY_KEYSTORE_PATH=$HOME/bathyapp-release.keystore" >> "$GITHUB_ENV"
+            echo "BATHY_KEYSTORE_PASSWORD=$BATHY_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "BATHY_KEY_ALIAS=$BATHY_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "BATHY_KEY_PASSWORD=$BATHY_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "No release keystore configured - generating an ephemeral one."
+            keytool -genkeypair -v \
+              -keystore "$HOME/bathyapp-release.keystore" \
+              -storepass android -keypass android \
+              -alias bathyapp -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=BathyApp, O=BathyApp" >/dev/null 2>&1
+            echo "BATHY_KEYSTORE_PATH=$HOME/bathyapp-release.keystore" >> "$GITHUB_ENV"
+            echo "BATHY_KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "BATHY_KEY_ALIAS=bathyapp" >> "$GITHUB_ENV"
+            echo "BATHY_KEY_PASSWORD=android" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and test
+        shell: bash
+        run: gradle :core:test :app:assembleDebug :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Upload APKs (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bathyapp-apks
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
