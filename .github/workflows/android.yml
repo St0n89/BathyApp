@@ -88,7 +88,22 @@ jobs:
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           grep -E '^e: ' gradle_output.txt > /tmp/fail.txt || true
-          sed -n '/FAILURE: Build failed/,$p' gradle_output.txt >> /tmp/fail.txt
+          sed -n '/FAILURE: Build failed/,$p' gradle_output.txt >> /tmp/fail.txt || true
+          find . -path '*/build/test-results/*/TEST-*.xml' -type f 2>/dev/null | while read -r f; do
+            if grep -q '<failure\|<error' "$f"; then
+              awk '
+                /<testcase / {
+                  match($0, /classname="[^"]*"/); cn=substr($0,RSTART+11,RLENGTH-12)
+                  match($0, /name="[^"]*"/); tc=substr($0,RSTART+6,RLENGTH-7)
+                }
+                /<failure|<error/ {
+                  match($0, /message="[^"]*"/); msg=substr($0,RSTART+9,RLENGTH-10)
+                  print "FAILED TEST " cn "." tc ": " msg
+                }
+              ' "$f" | sed 's/&#10;/\n/g; s/&#9;/\t/g; s/&quot;/\"/g; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' >> /tmp/fail.txt
+              echo "" >> /tmp/fail.txt
+            fi
+          done
           [ -s /tmp/fail.txt ] || tail -c 60000 gradle_output.txt > /tmp/fail.txt
           {
             echo "CI build failed."
