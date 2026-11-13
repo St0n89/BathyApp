@@ -75,8 +75,8 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
     val oy = canvasSize.height / 2f - grid.ny * cell / 2f + pan.y
 
     fun toPixel(lon: Double, lat: Double): Offset = Offset(
-        (ox + ((lon - grid.west) / grid.dx) * cell).toFloat(),
-        (oy + ((grid.north - lat) / grid.dy) * cell).toFloat(),
+        (ox + ((lon - grid.west) / grid.dx - 0.5) * cell).toFloat(),
+        (oy + ((grid.north - lat) / grid.dy - 0.5) * cell).toFloat(),
     )
 
     val geoTiffLauncher = rememberLauncherForActivityResult(
@@ -106,8 +106,8 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                             val col = (tap.x - x0) / c
                             val row = (tap.y - y0) / c
                             if (col >= 0f && col <= grid.nx - 1f && row >= 0f && row <= grid.ny - 1f) {
-                                val lon = grid.west + col * grid.dx
-                                val lat = grid.north - row * grid.dy
+                                val lon = grid.west + (col + 0.5f) * grid.dx
+                                val lat = grid.north - (row + 0.5f) * grid.dy
                                 vm.setPoint(lon, lat)
                             }
                         }

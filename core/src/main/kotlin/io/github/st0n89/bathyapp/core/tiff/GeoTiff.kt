@@ -250,7 +250,9 @@ object GeoTiffReader {
         } else if (pixelScale != null && pixelScale.size >= 2 && tiePoint != null && tiePoint.size >= 6) {
             val sx = pixelScale[0]
             val sy = pixelScale[1]
-            doubleArrayOf(sx, 0.0, 0.0, tiePoint[3] - tiePoint[0] * sx, 0.0, sy, 0.0, tiePoint[4] - tiePoint[1] * sy)
+            // north-up convention (GDAL): ModelPixelScale stores |dy|;
+            // rows run southward from the tiepoint, hence the negative sign.
+            doubleArrayOf(sx, 0.0, 0.0, tiePoint[3] - tiePoint[0] * sx, 0.0, -sy, 0.0, tiePoint[4] - tiePoint[1] * sy)
         } else {
             throw IllegalArgumentException("GeoTIFF has no georeferencing (ModelTransformation or ModelPixelScale/ModelTiepoint missing)")
         }

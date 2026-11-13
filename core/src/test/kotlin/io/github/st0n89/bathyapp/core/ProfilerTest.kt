@@ -13,13 +13,14 @@ import kotlin.test.assertTrue
 class ProfilerTest {
 
     private fun linearGrid(): GeoGrid {
-        // elevation = -100 - 10 * (lat - 50) over 50..54 N, 8..12 E
-        val nx = 41; val ny = 41
+        // elevation = -100 - 10 * (lat - 50) - 2 * (lon - 8) over 50..54 N, 8..12 E,
+        // cell centres aligned with the georeferencing; rows north-first.
+        val nx = 40; val ny = 40
         val v = FloatArray(nx * ny) { i ->
             val r = i / nx
             val c = i % nx
-            val lat = 50.0 + r * 0.1
-            val lon = 8.0 + c * 0.1
+            val lat = 54.0 - (r + 0.5) * 0.1
+            val lon = 8.0 + (c + 0.5) * 0.1
             (-100 - 10 * (lat - 50) - 2 * (lon - 8)).toFloat()
         }
         return GeoGrid(nx, ny, v, 8.0, 50.0, 12.0, 54.0)
@@ -64,7 +65,7 @@ class ProfilerTest {
         val text = out.toString("UTF-8")
         assertTrue(text.startsWith("# BathyApp grid export"))
         assertTrue(text.contains("lon,lat,elevation_m"))
-        assertTrue(text.contains("8.05,53.95,-100"))
+        assertTrue(text.contains("8.050000,53.950000,-139.600000"))
 
         val pts = listOf(
             ProfilePoint(0.0, 10.0, 50.0, -104.0),
