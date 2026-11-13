@@ -87,7 +87,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          sed -n '/FAILURE: Build failed/,$p' gradle_output.txt > /tmp/fail.txt
+          grep -E '^e: ' gradle_output.txt > /tmp/fail.txt || true
+          sed -n '/FAILURE: Build failed/,$p' gradle_output.txt >> /tmp/fail.txt
           [ -s /tmp/fail.txt ] || tail -c 60000 gradle_output.txt > /tmp/fail.txt
           {
             echo "CI build failed."
