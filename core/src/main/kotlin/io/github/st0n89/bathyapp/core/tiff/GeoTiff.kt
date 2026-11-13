@@ -494,7 +494,9 @@ object GeoTiffWriter {
         le32(0) // next IFD
         for (i in 0 until n) {
             val e = entries[i]
-            if (e.blob != null) {
+            // only out-of-line blobs live in the data area; inline blobs
+            // (size <= 4) are already stored in their IFD value fields
+            if (e.blob != null && e.blob.size > 4) {
                 bo.write(e.blob)
                 if (e.blob.size % 2 == 1) bo.write(0)
             }
