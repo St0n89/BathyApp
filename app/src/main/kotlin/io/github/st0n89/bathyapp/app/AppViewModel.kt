@@ -145,6 +145,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun goHome() = update { it.copy(screen = AppScreen.Home, error = null) }
 
+    /**
+     * Loads the currently visible map section (pan beyond the loaded grid):
+     * updates the coordinate fields so Home reflects the new region, then
+     * runs the normal load path. Stays on the map screen.
+     */
+    fun loadVisibleGrid(west: Double, south: Double, east: Double, north: Double) {
+        update {
+            it.copy(
+                west = fmt(west), south = fmt(south),
+                east = fmt(east), north = fmt(north),
+            )
+        }
+        loadGrid()
+    }
+
     fun goToMap() = update { if (it.grid != null) it.copy(screen = AppScreen.Map, error = null) else it }
 
     fun setPoint(lon: Double, lat: Double) = update { st ->
@@ -200,7 +215,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val grid: GeoGrid = when (st.source) {
                     DataSource.EMODNET -> {
                         val coverage = EmodnetWcs.COVERAGES[st.coverageIndex].id
-                        EmodnetWcs.loadGrid(coverage, bbox[0], bbox[1], bbox[2], bbox[3], cols)
+                        EmodnetWcs.loadGrid(coverage, bbox[0], bbox[1], bbox[2], bbox[3], cols) { note ->
+                            _state.value = _state.value.copy(loadingNote = note)
+                        }
                     }
                     DataSource.GEBCO -> loadGebcoGrid(bbox[0], bbox[1], bbox[2], bbox[3], cols)
                     DataSource.LOCAL_FILE -> {

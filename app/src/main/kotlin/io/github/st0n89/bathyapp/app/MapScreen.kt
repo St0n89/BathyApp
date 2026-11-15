@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -62,8 +64,8 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
         bmp.asImageBitmap()
     }
 
-    var scale by remember { mutableFloatStateOf(1f) }
-    var pan by remember { mutableStateOf(Offset.Zero) }
+    var scale by remember(grid) { mutableFloatStateOf(1f) }
+    var pan by remember(grid) { mutableStateOf(Offset.Zero) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
     val stats = remember(grid) { grid.stats() }
@@ -78,6 +80,30 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
         (ox + ((lon - grid.west) / grid.dx - 0.5) * cell).toFloat(),
         (oy + ((grid.north - lat) / grid.dy - 0.5) * cell).toFloat(),
     )
+
+    /** Geographic bbox currently visible in the canvas (world-clamped). */
+    fun visibleBox(): DoubleArray {
+        val lonAtWest = grid.west + ((0f - ox) / cell + 0.5) * grid.dx
+        val lonAtEast = grid.west + ((canvasSize.width - ox) / cell + 0.5) * grid.dx
+        val latAtTop = grid.north - ((0f - oy) / cell + 0.5) * grid.dy
+        val latAtBottom = grid.north - ((canvasSize.height - oy) / cell + 0.5) * grid.dy
+        var w = lonAtWest.coerceIn(-180.0, 180.0)
+        var e = lonAtEast.coerceIn(-180.0, 180.0)
+        var s = latAtBottom.coerceIn(-89.0, 89.0)
+        var n = latAtTop.coerceIn(-89.0, 89.0)
+        if (e - w < 0.02) { w -= 0.01; e += 0.01 }
+        if (n - s < 0.02) { s -= 0.01; n += 0.01 }
+        return doubleArrayOf(w, s, e, n)
+    }
+
+    val vis = if (canvasSize.width > 0 && canvasSize.height > 0) visibleBox() else null
+    // visible area extends beyond the loaded grid (with 1% slack)?
+    val epsLon = (grid.east - grid.west) * 0.01
+    val epsLat = (grid.north - grid.south) * 0.01
+    val beyondGrid = vis != null && (
+        vis[0] < grid.west - epsLon || vis[2] > grid.east + epsLon ||
+            vis[1] < grid.south - epsLat || vis[3] > grid.north + epsLat
+        )
 
     val geoTiffLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -156,6 +182,45 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
             }
         }
 
+        // Ausschnitt laden, wenn über den Rand des geladenen Gitters hinausgepannt wurde
+        if (beyondGrid && vis != null && !state.loading) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Außerhalb geladen: %.2f°…%.2f°E, %.2f°…%.2f°N".format(vis[0], vis[2], vis[1], vis[3]),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(onClick = { vm.loadVisibleGrid(vis[0], vis[1], vis[2], vis[3]) }) {
+                    Text("Ausschnitt laden")
+                }
+            }
+        }
+        if (state.loading) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.height(18.dp).width(18.dp),
+                    strokeWidth = 2.dp,
+                )
+                Text(
+                    state.loadingNote ?: "Lade Daten …",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
         // colorbar: Land (max) links ... Wasser (min) rechts
         Row(
             modifier = Modifier
@@ -192,18 +257,18 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                "A: ${state.pointA?.let { fmtPos(it) } ?: "–"}",
+                "A: ${state.pointA?.let { fmtPos(it) } ?: \"–\"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MarkerA,
             )
             Text(
-                "B: ${state.pointB?.let { fmtPos(it) } ?: "–"}",
+                "B: ${state.pointB?.let { fmtPos(it) } ?: \"–\"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MarkerB,
             )
         }
         Text(
-            "Tippen setzt A, dann B; weitere Taps verschieben B. Pinch ziehen zum Zoomen.",
+            "Tippen setzt A, dann B. Pinch zoomt. Über den Rand der geladenen Karte ziehen und \"Ausschnitt laden\" tippen, um neue Gebiete zu holen.",
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
         )
