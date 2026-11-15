@@ -257,12 +257,12 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                "A: ${state.pointA?.let { fmtPos(it) } ?: \"–\"}",
+                "A: ${state.pointA?.let { fmtPos(it) } ?: "–"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MarkerA,
             )
             Text(
-                "B: ${state.pointB?.let { fmtPos(it) } ?: \"–\"}",
+                "B: ${state.pointB?.let { fmtPos(it) } ?: "–"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MarkerB,
             )
