@@ -10,6 +10,7 @@ import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.export.Exporters
 import io.github.st0n89.bathyapp.core.gebco.GebcoCrop
 import io.github.st0n89.bathyapp.core.geo.GeoGrid
+import io.github.st0n89.bathyapp.core.geo.GlobeMath
 import io.github.st0n89.bathyapp.core.nc3.NcGrid
 import io.github.st0n89.bathyapp.core.nc3.NetCdf3File
 import io.github.st0n89.bathyapp.core.profile.Profiler
@@ -161,6 +162,58 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun goToMap() = update { if (it.grid != null) it.copy(screen = AppScreen.Map, error = null) else it }
+
+    /**
+     * Moves the selection bbox centre to (lat, lon), keeping the current
+     * lon/lat spans (used by the globe picker: tap sets the region).
+     */
+    fun selectCenter(lat: Double, lon: Double) {
+        update { st ->
+            val spanLon = spanLonOf(st)
+            val spanLat = spanLatOf(st)
+            val b = GlobeMath.bboxAround(GlobeMath.normLat(lat), GlobeMath.normLon(lon), spanLon, spanLat)
+            st.copy(west = fmt(b[0]), south = fmt(b[1]), east = fmt(b[2]), north = fmt(b[3]))
+        }
+    }
+
+    /**
+     * Scales the selection bbox about its centre. k = 1 corresponds to the
+     * default 6° x 4° region; k is clamped so the GEBCO crop limit holds.
+     */
+    fun scaleSelection(k: Double) {
+        update { st ->
+            val spanLon = (6.0 * k).coerceIn(0.02, 170.0)
+            val spanLat = (4.0 * k).coerceIn(0.02, 170.0)
+            val cLon = centreLonOf(st)
+            val cLat = centreLatOf(st)
+            val b = GlobeMath.bboxAround(cLat, cLon, spanLon, spanLat)
+            st.copy(west = fmt(b[0]), south = fmt(b[1]), east = fmt(b[2]), north = fmt(b[3]))
+        }
+    }
+
+    private fun spanLonOf(st: AppUiState): Double {
+        val w = st.west.trim().toDoubleOrNull() ?: return 6.0
+        val e = st.east.trim().toDoubleOrNull() ?: return 6.0
+        return (e - w).coerceIn(0.02, 170.0)
+    }
+
+    private fun spanLatOf(st: AppUiState): Double {
+        val s = st.south.trim().toDoubleOrNull() ?: return 4.0
+        val n = st.north.trim().toDoubleOrNull() ?: return 4.0
+        return (n - s).coerceIn(0.02, 170.0)
+    }
+
+    private fun centreLonOf(st: AppUiState): Double {
+        val w = st.west.trim().toDoubleOrNull() ?: return 6.0
+        val e = st.east.trim().toDoubleOrNull() ?: return 9.0
+        return GlobeMath.normLon((w + e) / 2.0)
+    }
+
+    private fun centreLatOf(st: AppUiState): Double {
+        val s = st.south.trim().toDoubleOrNull() ?: return 53.5
+        val n = st.north.trim().toDoubleOrNull() ?: return 57.5
+        return GlobeMath.normLat((s + n) / 2.0)
+    }
 
     fun setPoint(lon: Double, lat: Double) = update { st ->
         when {
