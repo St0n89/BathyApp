@@ -1,0 +1,1 @@
+Globus deutlich schärfer: Natural-Earth-Textur in doppelter Auflösung (2880 x 1440), nach jeder Geste rendert die App die sichtbare Hemisphäre im Hintergrund zusätzlich in Bildschirmauflösung nach. Schattenrelief und Ozean zeigen damit mehr Details, etwa beim Zoomen auf Regionen.

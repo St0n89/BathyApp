@@ -1,0 +1,1 @@
+Much sharper globe: Natural Earth texture at double resolution (2880 x 1440), and after every gesture the app re-renders the visible hemisphere in the background at screen resolution. Shaded relief and ocean show noticeably more detail, e.g. when zooming into a region.

@@ -17,27 +17,40 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
 
     companion object {
 
-        private val SPLIT_TOKEN = Regex("\\s+")
-
         fun read(input: InputStream, expectedHeader: String = "NECOLR"): GlobeColors {
-            val tokens = input.readBytes()
-                .toString(Charsets.UTF_8)
-                .split(SPLIT_TOKEN)
-                .filter { it.isNotEmpty() }
+            // Manual scanner: the text asset can be several MB with ~1M+ tokens,
+            // String.split() would allocate one String per token.
+            val s = input.readBytes().toString(Charsets.UTF_8)
+            val n = s.length
             var i = 0
 
-            fun next(): String {
-                require(i < tokens.size) { "truncated texture file" }
-                return tokens[i++]
+            fun skipWhitespace() {
+                while (i < n) {
+                    val c = s[i]
+                    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') i++ else break
+                }
+            }
+
+            fun expectWord(word: String) {
+                skipWhitespace()
+                require(s.startsWith(word, i)) { "bad file header, expected $word" }
+                i += word.length
             }
 
             fun nextInt(what: String): Int {
-                val v = next().toIntOrNull()
-                require(v != null) { "bad $what: ${tokens[i - 1]}" }
+                skipWhitespace()
+                var v = 0
+                var any = false
+                while (i < n && s[i] in '0'..'9') {
+                    v = v * 10 + (s[i] - '0')
+                    any = true
+                    i++
+                }
+                require(any && v <= Int.MAX_VALUE) { "bad $what at offset $i" }
                 return v
             }
 
-            require(next() == expectedHeader) { "bad file header, expected $expectedHeader" }
+            expectWord(expectedHeader)
             val w = nextInt("width")
             val h = nextInt("height")
             val p = nextInt("palette size")
@@ -64,7 +77,8 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
                 }
                 o += w
             }
-            require(i == tokens.size) { "trailing garbage in texture file" }
+            skipWhitespace()
+            require(i == n) { "trailing garbage in texture file" }
             return GlobeColors(w, h, palette, idx)
         }
     }

@@ -64,8 +64,11 @@ import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.geo.Coastlines
 import io.github.st0n89.bathyapp.core.geo.GlobeMath
 import io.github.st0n89.bathyapp.core.geo.GlobeColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.PI
 import kotlin.math.asin
@@ -91,6 +94,15 @@ private const val ZOOM_MAX = 400f
 /** Pixel budget for the shaded-sphere bitmap (rendered each frame). */
 private const val SHADE_PIXELS = 160_000
 
+/**
+ * Camera pixel budget for the idle high-detail redraw: after gestures/flings settle,
+ * the visible hemisphere is re-rendered at screen resolution in the background.
+ */
+private const val DETAIL_PIXELS = 1_300_000L
+
+/** Debounce before the idle detail render kicks in. */
+private const val DETAIL_DELAY_MS = 220L
+
 @Composable
 fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     val context = LocalContext.current
@@ -115,6 +127,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     var centerLat by remember { mutableStateOf(selCLat) }
     var zoom by remember { mutableStateOf(1f) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    var detailBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var flingJob by remember { mutableStateOf<Job?>(null) }
     var showCoords by remember { mutableStateOf(false) }
     var lastTapUp by remember { mutableStateOf(0L) }
@@ -163,7 +176,29 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     remember(globeTex, shadeBuf, centerLat, centerLon) {
         val b = shadeBuf
         val m = globeTex
+        detailBmp = null // stale; the quick buffer covers the disc until the detail pass lands
         if (b != null && m != null) renderShadedSphere(b, m, centerLat, centerLon)
+    }
+
+    // Idle high-detail pass: once the view settles for DETAIL_DELAY_MS, re-render the
+    // visible hemisphere at screen resolution (up to DETAIL_PIXELS) off the UI thread.
+    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize) {
+        val m = globeTex
+        if (m == null || canvasSize.width < 2 || canvasSize.height < 2) return@LaunchedEffect
+        delay(DETAIL_DELAY_MS)
+        val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
+        var side = (2f * rPx).toInt().coerceAtLeast(16)
+        if (side.toLong() * side > DETAIL_PIXELS) {
+            side = kotlin.math.sqrt(DETAIL_PIXELS.toDouble()).toInt()
+        }
+        val cl = centerLat
+        val co = centerLon
+        val bmp = withContext(Dispatchers.Default) {
+            android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888).also {
+                renderShadedSphere(ShadeBuffer(it, IntArray(side * side)), m, cl, co)
+            }
+        }
+        detailBmp = bmp
     }
 
     fun applyDrag(dxPx: Float, dyPx: Float) {
@@ -441,11 +476,13 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 )
 
                 // ---- shaded land/sea sphere (stretched onto the disc) ----
-                if (shadeBuf != null && globeTex != null) {
+                // high-detail idle render if available, else the quick interaction buffer
+                val shade: android.graphics.Bitmap? = detailBmp ?: shadeBuf?.bmp
+                if (shade != null) {
                     drawImage(
-                        image = shadeBuf.bmp.asImageBitmap(),
+                        image = shade.asImageBitmap(),
                         srcOffset = IntOffset.Zero,
-                        srcSize = IntSize(shadeBuf.bmp.width, shadeBuf.bmp.height),
+                        srcSize = IntSize(shade.width, shade.height),
                         dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
                         dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
                         filterQuality = FilterQuality.Medium,
