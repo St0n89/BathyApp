@@ -1,0 +1,16 @@
+Tiefenprofile und Tiefenraster für jedes Meeresgebiet, direkt auf dem Handy.
+
+Datenquellen:
+- GEBCO 2026 (weltweit, 15 Bogensekunden) über download.gebco.net, mit lokalem Crop-Cache; Folgeanfragen im gecachten Gebiet laden sofort
+- EMODnet Bathymetry WCS (europäische Gewässer, 3.75 Bogensekunden), mehrere Coverage-Stände wählbar
+- Lokale Bathymetrie-Dateien (NetCDF CDF-1/CDF-2 oder Float-GeoTIFF), komplett offline
+
+Funktionen:
+- Drehbarer 3D-Globus mit Natural-Earth-Farben zur Gebietswahl, bis herunter zu wenigen Hundert Metern Spannweite
+- Interaktive Kartenansicht mit farbigem Tiefenraster, Pinch-Zoom und Schwenken
+- Großkreis-Tiefenprofil mit Diagramm, Wasser-Schattierung und Statistik
+- Export als GeoTIFF, Raster-CSV und Profil-CSV über die System-Dateiauswahl
+
+NetCDF-Reader, GeoTIFF-Reader/-Writer, WCS-Client, GEBCO-Crop-Client und Profiler sind handgeschriebenes Kotlin mit vollständigem Unit-Test-Umfang. Keine Binär-Blobs, kein Tracking, Netzwerk nur für die Online-Datenquellen.
+
+Daten: General Bathymetric Chart of the Oceans (GEBCO), https://www.gebco.net sowie European Marine Observation and Data Network (EMODnet), https://emodnet.ec.europa.eu/en/bathymetry. Nutzung unter deren offenen Lizenzen.

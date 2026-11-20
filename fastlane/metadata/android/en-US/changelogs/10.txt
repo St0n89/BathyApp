@@ -1,0 +1,1 @@
+Natural Earth colors on the globe (land cover, shaded relief, ice), GEBCO is now the default source, active source shown on the home screen. Areas down to 0.002 degrees (about 220 m) selectable.

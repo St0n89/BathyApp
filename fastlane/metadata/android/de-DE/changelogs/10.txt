@@ -1,0 +1,1 @@
+Natural-Earth-Farben auf dem Globus (Landbedeckung, Schattenrelief, Eis), GEBCO ist jetzt Standardquelle, aktive Quelle wird auf dem Startbildschirm angezeigt. Gebiete bis 0.002 Grad (etwa 220 m) wählbar.

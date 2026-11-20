@@ -1,0 +1,45 @@
+# F-Droid build recipe for BathyApp.
+# Submit this file as metadata/io.github.st0n89.bathyapp.yml in fdroiddata
+# (GitLab merge request), see https://f-droid.org/docs/Inclusion_How-To/
+# Store-listing texts live in fastlane/metadata/android/ (en-US and de-DE).
+Categories:
+  - Navigation
+  - Science
+License: MIT
+AuthorName: Dennis Kunde
+SourceCode: https://github.com/St0n89/BathyApp
+IssueTracker: https://github.com/St0n89/BathyApp/issues
+Changelog: https://github.com/St0n89/BathyApp/releases
+AutoName: BathyApp
+Summary: Bathymetry profiles and grids from GEBCO and EMODnet data
+Description: |-
+    Generate bathymetric profiles and depth grids for any spot in the ocean,
+    directly on your phone.
+
+    Data sources:
+
+    * GEBCO 2026 (worldwide, 15 arc-second), with a local crop cache
+    * EMODnet Bathymetry WCS (European waters, 3.75 arc-second)
+    * local NetCDF (CDF-1/CDF-2) or float GeoTIFF files, fully offline
+
+    Features a rotating 3D globe with Natural Earth land/sea colors for area
+    selection, an interactive depth raster map, great-circle depth profiles
+    with statistics, and GeoTIFF/CSV export. NetCDF, GeoTIFF, WCS and GEBCO
+    crop clients are hand-written Kotlin, no binary blobs, no tracking.
+
+    Data: GEBCO (https://www.gebco.net) and EMODnet
+    (https://emodnet.ec.europa.eu/en/bathymetry), used under their open
+    licenses.
+RepoType: git
+Repo: https://github.com/St0n89/BathyApp.git
+Builds:
+  - versionName: 0.5.0
+    versionCode: 10
+    commit: 604cbd5da598ea25d9b442a046dcb6b5924ce754
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/app-release.apk
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags
+CurrentVersion: 0.5.0
+CurrentVersionCode: 10

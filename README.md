@@ -1,5 +1,9 @@
 # BathyApp
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/St0n89/BathyApp/actions/workflows/android.yml/badge.svg)](https://github.com/St0n89/BathyApp/actions/workflows/android.yml)
+[![GitHub release](https://img.shields.io/github/v/release/St0n89/BathyApp.svg)](https://github.com/St0n89/BathyApp/releases)
+
 Android app for generating **bathymetric profiles and grids** from
 [EMODnet Bathymetry](https://emodnet.ec.europa.eu/en/bathymetry) (online, WCS),
 **GEBCO 2026** (online, worldwide) or **GEBCO** grids (offline, NetCDF /
@@ -51,6 +55,19 @@ unit-tested).
 6. *GeoTIFF / Gitter-CSV / Profil-CSV* export the current result.
 
 UI language is German.
+
+## Installation
+
+- **F-Droid client / IzzyOnDroid repo** (recommended once included):
+  add the [IzzyOnDroid repo](https://apt.izzysofts.de/fdroid/repo?fingerprint=3F:0A:20:1C:68:71:D0:DE:BB:1D:B5:54:03:9B:1B:82:3F:DB:17:36:69:F6:0F:8D:C7:9A:CE:66:9B:EE:FA:FB)
+  (`https://apt.izzysofts.de/fdroid/repo`) in your F-Droid client and install
+  `io.github.st0n89.bathyapp`. Updates then arrive through the F-Droid client.
+- **Obtainium / direct download**: the signed release APK is attached to each
+  [GitHub release](https://github.com/St0n89/BathyApp/releases).
+  [Obtainium](https://github.com/ImranR98/Obtainium) can track the releases page
+  and notifies you about updates.
+- Official **F-Droid** inclusion is in progress; the build recipe is kept in
+  [`fdroid/io.github.st0n89.bathyapp.yml`](fdroid/io.github.st0n89.bathyapp.yml).
 
 ## Building
 

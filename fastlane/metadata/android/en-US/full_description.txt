@@ -1,0 +1,16 @@
+Generate bathymetric profiles and depth grids for any spot in the ocean, directly on your phone.
+
+Data sources:
+- GEBCO 2026 (worldwide, 15 arc-second) via download.gebco.net, with a local crop cache so repeated requests load instantly
+- EMODnet Bathymetry WCS (European waters, 3.75 arc-second), several coverage releases selectable
+- Local bathymetry files (NetCDF CDF-1/CDF-2 or float GeoTIFF), fully offline
+
+Features:
+- Rotating 3D globe with Natural Earth land/sea colors to pick the survey area, down to a few hundred meters
+- Interactive map view with colored depth raster, pinch-zoom and pan
+- Great-circle depth profile with chart view, water body shading and summary statistics
+- Export GeoTIFF, grid CSV and profile CSV via the system file picker
+
+The NetCDF reader, GeoTIFF reader/writer, WCS client, GEBCO crop client and profiler are hand-written Kotlin with a full unit test suite. No binary blobs, no tracking, network is only used for the online data sources.
+
+Data: General Bathymetric Chart of the Oceans (GEBCO), https://www.gebco.net and European Marine Observation and Data Network (EMODnet), https://emodnet.ec.europa.eu/en/bathymetry. Used under their open licenses.
