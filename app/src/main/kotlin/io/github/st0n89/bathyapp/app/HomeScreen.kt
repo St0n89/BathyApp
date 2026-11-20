@@ -152,7 +152,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         runCatching { context.assets.open("coast_50m.txt").use { Coastlines.read(it) } }.getOrNull()
     }
     val globeTex = remember {
-        runCatching { context.assets.open("ne1_50m.txt").use { GlobeColors.read(it) } }.getOrNull()
+        runCatching { GlobeColors.read("ne1_50m.txt") { p -> context.assets.open(p) } }.getOrNull()
     }
 
     // Shaded sphere: half-resolution android bitmap redrawn when the view changes.
@@ -871,9 +871,11 @@ private fun renderShadedSphere(
             val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
             val latD = phi * 180.0 / PI
             val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
-            val mi = (((lonD + 180.0) / 360.0) * maskW).toInt().coerceIn(0, maskW - 1)
-            val mj = (((90.0 - latD) / 180.0) * maskH).toInt().coerceIn(0, maskH - 1)
-            val argb = tex.sample(mi, mj)
+            // Fractional mask coords (pixel centres at integers): bilinear lookup
+            // keeps coastlines and relief smooth when the texture is magnified.
+            val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
+            val my = ((90.0 - latD) / 180.0) * maskH - 0.5
+            val argb = tex.sampleBilinear(mx, my)
             // Gentle sphere shading; the texture already carries its own relief.
             val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
             val k = 0.72 + 0.28 * diff
