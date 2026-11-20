@@ -182,8 +182,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun scaleSelection(k: Double) {
         update { st ->
-            val spanLon = (6.0 * k).coerceIn(0.02, 170.0)
-            val spanLat = (4.0 * k).coerceIn(0.02, 170.0)
+            val spanLon = (6.0 * k).coerceIn(0.002, 170.0)
+            val spanLat = (4.0 * k).coerceIn(0.002, 170.0)
             val cLon = centreLonOf(st)
             val cLat = centreLatOf(st)
             val b = GlobeMath.bboxAround(cLat, cLon, spanLon, spanLat)
@@ -197,8 +197,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setSpans(spanLon: Double, spanLat: Double) {
         update { st ->
-            val sLon = spanLon.coerceIn(0.02, 170.0)
-            val sLat = spanLat.coerceIn(0.02, 170.0)
+            val sLon = spanLon.coerceIn(0.002, 170.0)
+            val sLat = spanLat.coerceIn(0.002, 170.0)
             val b = GlobeMath.bboxAround(centreLatOf(st), centreLonOf(st), sLon, sLat)
             st.copy(west = fmt(b[0]), south = fmt(b[1]), east = fmt(b[2]), north = fmt(b[3]))
         }
@@ -207,13 +207,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun spanLonOf(st: AppUiState): Double {
         val w = st.west.trim().toDoubleOrNull() ?: return 6.0
         val e = st.east.trim().toDoubleOrNull() ?: return 6.0
-        return (e - w).coerceIn(0.02, 170.0)
+        return (e - w).coerceIn(0.002, 170.0)
     }
 
     private fun spanLatOf(st: AppUiState): Double {
         val s = st.south.trim().toDoubleOrNull() ?: return 4.0
         val n = st.north.trim().toDoubleOrNull() ?: return 4.0
-        return (n - s).coerceIn(0.02, 170.0)
+        return (n - s).coerceIn(0.002, 170.0)
     }
 
     private fun centreLonOf(st: AppUiState): Double {

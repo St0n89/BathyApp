@@ -18,10 +18,16 @@ class Coastlines(val polylines: Array<FloatArray>) {
 
     companion object {
 
-        fun read(input: InputStream): Coastlines {
+        private val SPLIT_TOKEN = Regex("\\s+")
+
+        /**
+         * Reads the token stream. [expectedHeader] defaults to the coastline
+         * file; the land file uses the same format with header NELAND.
+         */
+        fun read(input: InputStream, expectedHeader: String = "NECOAST"): Coastlines {
             val tokens = input.readBytes()
                 .toString(Charsets.UTF_8)
-                .split(Regex("\\s+"))
+                .split(SPLIT_TOKEN)
                 .filter { it.isNotEmpty() }
             var i = 0
 
@@ -30,7 +36,7 @@ class Coastlines(val polylines: Array<FloatArray>) {
                 return tokens[i++]
             }
 
-            require(next() == "NECOAST") { "bad coastline header" }
+            require(next() == expectedHeader) { "bad file header, expected $expectedHeader" }
             val n = next().toIntOrNull()
                 ?: throw IllegalArgumentException("bad line count")
             require(n in 0..1_000_000) { "bad line count: $n" }

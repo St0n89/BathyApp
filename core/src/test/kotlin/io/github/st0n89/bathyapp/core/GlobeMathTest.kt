@@ -107,7 +107,7 @@ class GlobeMathTest {
     @Test
     fun bboxAroundRejectsBadSpans() {
         assertFailsWith<IllegalArgumentException> { GlobeMath.bboxAround(0.0, 0.0, 0.0, 4.0) }
-        assertFailsWith<IllegalArgumentException> { GlobeMath.bboxAround(0.0, 0.0, 6.0, 0.01) }
+        assertFailsWith<IllegalArgumentException> { GlobeMath.bboxAround(0.0, 0.0, 6.0, 0.001) }
     }
 
     @Test

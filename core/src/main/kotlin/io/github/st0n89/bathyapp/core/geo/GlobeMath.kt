@@ -67,7 +67,7 @@ object GlobeMath {
      * given spans, shifted (never resized) so it stays inside the world.
      */
     fun bboxAround(lat: Double, lon: Double, spanLon: Double, spanLat: Double): DoubleArray {
-        require(spanLon in 0.02..360.0 && spanLat in 0.02..180.0) { "invalid spans" }
+        require(spanLon in 0.002..360.0 && spanLat in 0.002..180.0) { "invalid spans" }
         var w = lon - spanLon / 2.0
         var e = lon + spanLon / 2.0
         var s = lat - spanLat / 2.0

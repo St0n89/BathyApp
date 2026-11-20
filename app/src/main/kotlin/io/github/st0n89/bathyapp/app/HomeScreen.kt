@@ -46,7 +46,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,30 +57,43 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.geo.Coastlines
 import io.github.st0n89.bathyapp.core.geo.GlobeMath
+import io.github.st0n89.bathyapp.core.geo.LandRaster
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.PI
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 private val Accent = Color(0xFF3FA9D9)
 private val GridBox = Color(0xFF7CFC9A)
 
 /** Selection scale limits for the size slider (6° x 4° at k = 1). */
-private const val K_MIN = 0.0035
+private const val K_MIN = 3.33e-4
 private const val K_MAX = 20.0
 
-/** Globe zoom bounds (0.8 fits the whole disc, 12 is enough for ~2 km areas). */
+/** Globe zoom bounds (0.8 fits the whole disc, 400 is enough for ~1 km areas). */
 private const val ZOOM_MIN = 0.8f
-private const val ZOOM_MAX = 12f
+private const val ZOOM_MAX = 400f
+
+/** Land/sea mask raster resolution (equirectangular). */
+private const val MASK_W = 1440
+private const val MASK_H = 720
+
+/** Pixel budget for the shaded-sphere bitmap (rendered each frame). */
+private const val SHADE_PIXELS = 160_000
 
 @Composable
 fun HomeScreen(vm: AppViewModel, state: AppUiState) {
@@ -96,8 +111,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     val n = state.north.toDoubleOrNull() ?: 57.5
     val selCLon = GlobeMath.normLon((w + e) / 2.0)
     val selCLat = GlobeMath.normLat((s + n) / 2.0)
-    val spanLon = (e - w).coerceAtLeast(0.02)
-    val spanLat = (n - s).coerceAtLeast(0.02)
+    val spanLon = (e - w).coerceAtLeast(0.002)
+    val spanLat = (n - s).coerceAtLeast(0.002)
 
     // ---- globe view state ----
     var centerLon by remember { mutableStateOf(selCLon) }
@@ -127,6 +142,34 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     val coasts = remember {
         runCatching { context.assets.open("coast_50m.txt").use { Coastlines.read(it) } }.getOrNull()
     }
+    val landMask = remember {
+        val land = runCatching { context.assets.open("land_50m.txt").use { Coastlines.read(it, "NELAND") } }.getOrNull()
+        if (land == null) null else LandRaster.rasterize(land, MASK_W, MASK_H)
+    }
+
+    // Shaded sphere: half-resolution android bitmap redrawn when the view changes.
+    val shadeBuf = remember(canvasSize) {
+        if (canvasSize.width < 2 || canvasSize.height < 2) null
+        else {
+            var sw = canvasSize.width / 2
+            var sh = canvasSize.height / 2
+            val pxCount = sw * sh
+            if (pxCount > SHADE_PIXELS) {
+                val f = kotlin.math.sqrt(SHADE_PIXELS.toDouble() / pxCount)
+                sw = (sw * f).toInt().coerceAtLeast(8)
+                sh = (sh * f).toInt().coerceAtLeast(8)
+            }
+            ShadeBuffer(
+                android.graphics.Bitmap.createBitmap(sw, sh, android.graphics.Bitmap.Config.ARGB_8888),
+                IntArray(sw * sh),
+            )
+        }
+    }
+    remember(landMask, shadeBuf, centerLat, centerLon, zoom) {
+        val b = shadeBuf
+        val m = landMask
+        if (b != null && m != null) renderShadedSphere(b, m, MASK_W, MASK_H, centerLat, centerLon, zoom)
+    }
 
     fun applyDrag(dxPx: Float, dyPx: Float) {
         val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
@@ -144,14 +187,16 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         zoom = (zoom * factor).coerceIn(ZOOM_MIN, ZOOM_MAX)
     }
 
-    /** Smoothly rotates the globe onto the selection centre. */
+    /** Smoothly rotates and zooms the globe onto the selection centre. */
     fun spinToSelection() {
         val lat = selCLat
         val lon = selCLon
+        val targetZoom = (65.0 / maxOf(spanLon, 0.004)).coerceIn(ZOOM_MIN.toDouble(), ZOOM_MAX.toDouble())
         flingJob?.cancel()
         flingJob = scope.launch {
             val startLat = centerLat
             val startLon = centerLon
+            val startZoom = zoom.toDouble()
             val dLat = lat - startLat
             val dLon = shortestLonDelta(startLon, lon)
             var t = 0f
@@ -160,6 +205,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 val ease = (t * t * (3f - 2f * t)).toDouble()
                 centerLat = startLat + dLat * ease
                 centerLon = startLon + dLon * ease
+                zoom = (startZoom + (targetZoom - startZoom) * ease).toFloat()
             }
         }
     }
@@ -399,6 +445,18 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                     style = Stroke(width = 1.dp.toPx()),
                 )
 
+                // ---- shaded land/sea sphere (stretched onto the disc) ----
+                if (shadeBuf != null && landMask != null) {
+                    drawImage(
+                        image = shadeBuf.bmp.asImageBitmap(),
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(shadeBuf.bmp.width, shadeBuf.bmp.height),
+                        dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
+                        dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
+                        filterQuality = FilterQuality.Medium,
+                    )
+                }
+
                 // ---- graticule ----
                 val gridPath = Path()
                 val majorPath = Path()
@@ -538,8 +596,9 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             // centre readout
             val kmLon = spanLon * 111.32 * cos(Math.toRadians(selCLat))
             val kmLat = spanLat * 110.574
+            val kmFmt = if (maxOf(kmLon, kmLat) < 10.0) "%.2f × %.2f km" else "%.0f × %.0f km"
             Text(
-                "%.2f°, %.2f°\n%.0f × %.0f km".format(selCLon, selCLat, kmLon, kmLat),
+                "%.4f°, %.4f°\n".format(selCLon, selCLat) + kmFmt.format(kmLon, kmLat),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 textAlign = TextAlign.End,
@@ -636,10 +695,10 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             // size slider (log scale)
             val k = (spanLon / 6.0).coerceIn(K_MIN, K_MAX)
             val sliderPos = ((log10(k) - log10(K_MIN)) / (log10(K_MAX) - log10(K_MIN))).toFloat()
-            val spanTxt = if (spanLon < 1.0) {
-                "%.2f°×%.2f°".format(spanLon, spanLat)
-            } else {
-                "%.1f°×%.1f°".format(spanLon, spanLat)
+            val spanTxt = when {
+                spanLon < 0.01 -> "%.4f°×%.4f°".format(spanLon, spanLat)
+                spanLon < 1.0 -> "%.3f°×%.3f°".format(spanLon, spanLat)
+                else -> "%.2f°×%.2f°".format(spanLon, spanLat)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Gebiet", style = MaterialTheme.typography.labelMedium)
@@ -655,7 +714,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 Text(
                     spanTxt,
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.size(width = 64.dp, height = 20.dp),
+                    modifier = Modifier.size(width = 96.dp, height = 20.dp),
                 )
             }
 
@@ -718,6 +777,78 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             },
         )
     }
+}
+
+/** Offscreen bitmap + pixel scratch for the shaded globe. */
+private class ShadeBuffer(val bmp: android.graphics.Bitmap, val px: IntArray)
+
+/**
+ * Software-renders the visible hemisphere with per-pixel inverse orthographic projection,
+ * a land/sea mask lookup and diffuse day-side shading (light from upper left).
+ */
+private fun renderShadedSphere(
+    buf: ShadeBuffer,
+    mask: ByteArray,
+    maskW: Int,
+    maskH: Int,
+    lat0: Double,
+    lon0: Double,
+    zoom: Float,
+) {
+    val w = buf.bmp.width
+    val h = buf.bmp.height
+    val px = buf.px
+    val p0 = lat0 * PI / 180.0
+    val l0 = lon0 * PI / 180.0
+    val sinP0 = sin(p0)
+    val cosP0 = cos(p0)
+    // Diffuse light direction in view space (unit): upper left, slightly toward viewer.
+    val lx = -0.38
+    val ly = 0.42
+    val lz = 0.82
+    // Base colors: deep ocean blue, dark sage green land.
+    val oceanR = 13
+    val oceanG = 34
+    val oceanB = 61
+    val landR = 86
+    val landG = 100
+    val landB = 78
+    var i = 0
+    for (jy in 0 until h) {
+        // Normalized device coordinates on [-1, 1] with y pointing north.
+        val gy = 1.0 - 2.0 * (jy + 0.5) / h
+        for (ix in 0 until w) {
+            val gx = 2.0 * (ix + 0.5) / w - 1.0
+            val rr = gx * gx + gy * gy
+            if (rr > 1.0) {
+                px[i++] = 0 // transparent space
+                continue
+            }
+            val rho = sqrt(rr)
+            val nz = sqrt((1.0 - rr).coerceAtLeast(0.0)) // cos of angular distance AND sin of it via identity
+            // Spherical law of cosines with c = angle from centre: cosC = rho, sinC = nz.
+            val sinPhi = rho * sinP0 + gy * nz * cosP0
+            val phi = if (rho < 1e-9) p0 else asin(sinPhi.coerceIn(-1.0, 1.0))
+            val lam = if (rho < 1e-9) {
+                l0
+            } else {
+                l0 + atan2(gx * nz, rho * rho * cosP0 - gy * nz * sinP0)
+            }
+            val latD = phi * 180.0 / PI
+            val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
+            val mi = (((lonD + 180.0) / 360.0) * maskW).toInt().coerceIn(0, maskW - 1)
+            val mj = (((90.0 - latD) / 180.0) * maskH).toInt().coerceIn(0, maskH - 1)
+            val isLand = mask[mj * maskW + mi] != 0.toByte()
+            // Surface normal in view space (towards the observer hemisphere); nz from above.
+            val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
+            val k = 0.42 + 0.58 * diff
+            val r = ((if (isLand) landR else oceanR) * k).toInt().coerceIn(0, 255)
+            val g = ((if (isLand) landG else oceanG) * k).toInt().coerceIn(0, 255)
+            val b = ((if (isLand) landB else oceanB) * k).toInt().coerceIn(0, 255)
+            px[i++] = 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
+        }
+    }
+    buf.bmp.setPixels(px, 0, w, 0, 0, w, h)
 }
 
 /** Shortest signed longitude delta from [from] to [to]. */
