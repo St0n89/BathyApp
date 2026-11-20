@@ -824,16 +824,14 @@ private fun renderShadedSphere(
                 px[i++] = 0 // transparent space
                 continue
             }
-            val rho = sqrt(rr)
-            val nz = sqrt((1.0 - rr).coerceAtLeast(0.0)) // cos of angular distance AND sin of it via identity
-            // Spherical law of cosines with c = angle from centre: cosC = rho, sinC = nz.
-            val sinPhi = rho * sinP0 + gy * nz * cosP0
-            val phi = if (rho < 1e-9) p0 else asin(sinPhi.coerceIn(-1.0, 1.0))
-            val lam = if (rho < 1e-9) {
-                l0
-            } else {
-                l0 + atan2(gx * nz, rho * rho * cosP0 - gy * nz * sinP0)
-            }
+            // Inverse orthographic in the (east, north, centre) view frame:
+            // P = gx*E + gy*N + nz*C, hence the surface point has
+            // sin(lat) = nz*sin(lat0) + gy*cos(lat0) and
+            // dlon = atan2(gx, cos(lat0)*nz - sin(lat0)*gy). Exact at the centre too.
+            val nz = sqrt((1.0 - rr).coerceAtLeast(0.0))
+            val sinPhi = nz * sinP0 + gy * cosP0
+            val phi = asin(sinPhi.coerceIn(-1.0, 1.0))
+            val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
             val latD = phi * 180.0 / PI
             val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
             val mi = (((lonD + 180.0) / 360.0) * maskW).toInt().coerceIn(0, maskW - 1)
