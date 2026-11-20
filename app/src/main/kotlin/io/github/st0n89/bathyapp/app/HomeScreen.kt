@@ -9,13 +9,17 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +34,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +54,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
@@ -59,16 +65,20 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.log10
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 private val Accent = Color(0xFF3FA9D9)
 private val GridBox = Color(0xFF7CFC9A)
 
 /** Selection scale limits for the size slider (6° x 4° at k = 1). */
-private const val K_MIN = 0.05
+private const val K_MIN = 0.0035
 private const val K_MAX = 20.0
+
+/** Globe zoom bounds (0.8 fits the whole disc, 12 is enough for ~2 km areas). */
+private const val ZOOM_MIN = 0.8f
+private const val ZOOM_MAX = 12f
 
 @Composable
 fun HomeScreen(vm: AppViewModel, state: AppUiState) {
@@ -96,6 +106,23 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var flingJob by remember { mutableStateOf<Job?>(null) }
     var showCoords by remember { mutableStateOf(false) }
+    var lastTapUp by remember { mutableStateOf(0L) }
+    var lastTapPos by remember { mutableStateOf(Offset.Zero) }
+
+    // Live snapshots for the gesture handler: pointerInput keeps the closure
+    // it was created with, but MutableState reads always see current values.
+    var snapW by remember { mutableStateOf(w) }
+    var snapS by remember { mutableStateOf(s) }
+    var snapE by remember { mutableStateOf(e) }
+    var snapN by remember { mutableStateOf(n) }
+    var snapCLat by remember { mutableStateOf(selCLat) }
+    var snapCLon by remember { mutableStateOf(selCLon) }
+    var loadingActive by remember { mutableStateOf(state.loading) }
+    LaunchedEffect(state.west, state.east, state.south, state.north, state.loading) {
+        snapW = w; snapS = s; snapE = e; snapN = n
+        snapCLat = selCLat; snapCLon = selCLon
+        loadingActive = state.loading
+    }
 
     val coasts = remember {
         runCatching { context.assets.open("coast_50m.txt").use { Coastlines.read(it) } }.getOrNull()
@@ -108,6 +135,33 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         centerLat = (centerLat + dLat).coerceIn(-89.0, 89.0)
         val cosLat = cos(Math.toRadians(centerLat)).coerceAtLeast(0.05)
         centerLon = GlobeMath.normLon(centerLon - Math.toDegrees(dxPx.toDouble() / (rPx * cosLat)))
+    }
+
+    /** Zooms the globe toward a screen position (drag the point halfway to the centre, then scale). */
+    fun zoomToward(px: Float, py: Float, factor: Float) {
+        if (canvasSize.width == 0) return
+        applyDrag((canvasSize.width / 2f - px) * 0.45f, (canvasSize.height / 2f - py) * 0.45f)
+        zoom = (zoom * factor).coerceIn(ZOOM_MIN, ZOOM_MAX)
+    }
+
+    /** Smoothly rotates the globe onto the selection centre. */
+    fun spinToSelection() {
+        val lat = selCLat
+        val lon = selCLon
+        flingJob?.cancel()
+        flingJob = scope.launch {
+            val startLat = centerLat
+            val startLon = centerLon
+            val dLat = lat - startLat
+            val dLon = shortestLonDelta(startLon, lon)
+            var t = 0f
+            while (t < 1f) {
+                withFrameNanos { t = min(1f, t + 0.07f) }
+                val ease = (t * t * (3f - 2f * t)).toDouble()
+                centerLat = startLat + dLat * ease
+                centerLon = startLon + dLon * ease
+            }
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -123,6 +177,72 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                         awaitEachGesture {
                             flingJob?.cancel()
                             val down = awaitFirstDown(requireUnconsumed = false)
+
+                            // ---- geometry for this gesture (rPx fixed at down time) ----
+                            val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
+                            val ccx = canvasSize.width / 2f
+                            val ccy = canvasSize.height / 2f
+
+                            fun projToPx(lat: Double, lon: Double): Offset? {
+                                if (rPx <= 1f) return null
+                                return GlobeMath.projectUnit(lat, lon, centerLat, centerLon)?.let {
+                                    Offset(ccx + (it.first * rPx).toFloat(), ccy - (it.second * rPx).toFloat())
+                                }
+                            }
+
+                            /** Unprojects a screen point, clamped to the visible disc. */
+                            fun unproj(x: Float, y: Float): Pair<Double, Double>? {
+                                if (rPx <= 1f) return null
+                                var gx = (x - ccx).toDouble() / rPx
+                                var gy = -(y - ccy).toDouble() / rPx
+                                val rho = sqrt(gx * gx + gy * gy)
+                                if (rho > 0.999) {
+                                    val f = 0.999 / rho
+                                    gx *= f; gy *= f
+                                }
+                                return GlobeMath.unprojectUnit(gx, gy, centerLat, centerLon)
+                            }
+
+                            // ---- classify the down event: globe / move box / corner resize ----
+                            var mode = 0 // 0 globe, 1 move box, 2 corner resize
+                            var grabLat = 0.0
+                            var grabLon = 0.0
+                            if (!loadingActive) {
+                                val cLat0 = snapCLat
+                                val cLon0 = snapCLon
+                                val span0 = (snapE - snapW).coerceAtLeast(0.02)
+                                val grabPx = 24.dp.toPx()
+                                val cornerPx = listOf(
+                                    projToPx(snapN, snapW), projToPx(snapN, snapE),
+                                    projToPx(snapS, snapW), projToPx(snapS, snapE),
+                                )
+                                var best = grabPx
+                                var hitCorner = -1
+                                cornerPx.forEachIndexed { i, o ->
+                                    if (o != null) {
+                                        val d = (o - down.position).getDistance()
+                                        if (d < best) {
+                                            best = d; hitCorner = i
+                                        }
+                                    }
+                                }
+                                if (hitCorner >= 0) {
+                                    mode = 2
+                                } else {
+                                    val ll = unproj(down.position.x, down.position.y)
+                                    if (ll != null &&
+                                        ll.first >= snapS - 1e-9 && ll.first <= snapN + 1e-9 &&
+                                        abs(shortestLonDelta(cLon0, ll.second)) <= span0 / 2 + 1e-9
+                                    ) {
+                                        mode = 1
+                                        grabLat = cLat0 - ll.first
+                                        grabLon = shortestLonDelta(ll.second, cLon0)
+                                    }
+                                }
+                                if (mode != 0) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+
+                            val primaryId = down.id
                             var last = down.position
                             var lastT = down.uptimeMillis
                             var vx = 0.0
@@ -130,64 +250,91 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                             var moved = 0f
                             var pinch = false
                             var prevSpread = -1f
-                            var tapPos = last
+                            var spread0 = -1f
+                            var twoDownUptime = 0L
+                            var tapPos = down.position
+                            var upUptime = 0L
+
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val pressed = event.changes.filter { it.pressed }
                                 if (pressed.isEmpty()) {
                                     tapPos = event.changes.firstOrNull()?.position ?: last
+                                    upUptime = event.changes.firstOrNull()?.uptimeMillis ?: 0L
                                     break
                                 }
-                                if (state.loading) continue
-                                if (pressed.size >= 2) {
-                                    pinch = true
+                                if (loadingActive) continue
+                                if (pressed.size >= 2 && mode == 0) {
+                                    if (!pinch) {
+                                        pinch = true
+                                        twoDownUptime = pressed[0].uptimeMillis
+                                    }
                                     val spread = (pressed[0].position - pressed[1].position).getDistance()
+                                    if (spread0 < 0f) spread0 = spread
                                     if (prevSpread > 0f && spread > 0f) {
-                                        zoom = (zoom * (spread / prevSpread)).coerceIn(0.8f, 2.6f)
+                                        zoom = (zoom * (spread / prevSpread)).coerceIn(ZOOM_MIN, ZOOM_MAX)
                                     }
                                     prevSpread = spread
-                                } else {
-                                    prevSpread = -1f
-                                    val now = event.changes[0].uptimeMillis
-                                    val p = event.changes[0].position
-                                    val dx = p.x - last.x
-                                    val dy = p.y - last.y
-                                    moved += abs(dx) + abs(dy)
-                                    if (!pinch) applyDrag(dx, dy)
-                                    val dt = (now - lastT).coerceAtLeast(1)
-                                    vx = 0.75 * vx + 0.25 * (dx / dt)
-                                    vy = 0.75 * vy + 0.25 * (dy / dt)
-                                    last = p
-                                    lastT = now
-                                }
-                            }
-                            if (!pinch && moved < slop && !state.loading) {
-                                // tap: set the selection centre
-                                val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
-                                if (rPx > 1f) {
-                                    val cx = canvasSize.width / 2f
-                                    val cy = canvasSize.height / 2f
-                                    val gx = (tapPos.x - cx) / rPx
-                                    val gy = -(tapPos.y - cy) / rPx
-                                    globeMathTap@ {
-                                        val ll = GlobeMath.unprojectUnit(gx.toDouble(), gy.toDouble(), centerLat, centerLon) ?: return@globeMathTap
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        vm.selectCenter(ll.first, ll.second)
-                                        // gently rotate to the new centre
-                                        scope.launch {
-                                            var t = 0f
-                                            val startLat = centerLat
-                                            val startLon = centerLon
-                                            while (t < 1f) {
-                                                withFrameNanos { t = min(1f, t + 0.08f) }
-                                                centerLat = startLat + (ll.first - startLat) * t
-                                                centerLon = startLon + shortestLonDelta(startLon, ll.second) * t
+                                } else if (pressed.size == 1 || mode != 0) {
+                                    val pMove = event.changes.firstOrNull { it.id == primaryId && it.pressed }
+                                        ?: break
+                                    val p = pMove.position
+                                    if (pinch) {
+                                        prevSpread = -1f
+                                    } else {
+                                        val now = pMove.uptimeMillis
+                                        val dx = p.x - last.x
+                                        val dy = p.y - last.y
+                                        moved += abs(dx) + abs(dy)
+                                        when (mode) {
+                                            0 -> applyDrag(dx, dy)
+                                            1 -> unproj(p.x, p.y)?.let {
+                                                vm.selectCenter(it.first + grabLat, it.second + grabLon)
+                                            }
+                                            2 -> unproj(p.x, p.y)?.let {
+                                                val dLat = it.first - snapCLat
+                                                val dLon = shortestLonDelta(snapCLon, it.second)
+                                                vm.setSpans(2 * abs(dLon), 2 * abs(dLat))
                                             }
                                         }
+                                        val dt = (now - lastT).coerceAtLeast(1)
+                                        vx = 0.75 * vx + 0.25 * (dx / dt)
+                                        vy = 0.75 * vy + 0.25 * (dy / dt)
+                                        last = p
+                                        lastT = now
                                     }
                                 }
-                            } else if (!pinch) {
-                                // inertia
+                            }
+
+                            if (loadingActive || pinch) {
+                                // quick two-finger tap with barely changed spread = zoom out
+                                if (!loadingActive && pinch && spread0 > 0f && prevSpread > 0f &&
+                                    abs(prevSpread - spread0) < 0.06f * spread0 &&
+                                    upUptime - twoDownUptime in 1..350 && moved < slop * 2
+                                ) {
+                                    zoom = (zoom / 1.6f).coerceIn(ZOOM_MIN, ZOOM_MAX)
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                return@awaitEachGesture
+                            }
+
+                            if (moved < slop && upUptime > 0L) {
+                                if (upUptime - lastTapUp < 280L && (tapPos - lastTapPos).getDistance() < 80f) {
+                                    // double tap: zoom toward the tapped point
+                                    zoomToward(tapPos.x, tapPos.y, 1.55f)
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                } else if (mode == 0) {
+                                    // single tap on the globe: move the selection centre there
+                                    val ll = unproj(tapPos.x, tapPos.y)
+                                    if (ll != null) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        vm.selectCenter(ll.first, ll.second)
+                                    }
+                                }
+                                lastTapUp = upUptime
+                                lastTapPos = tapPos
+                            } else if (mode == 0) {
+                                // inertia fling
                                 flingJob?.cancel()
                                 flingJob = scope.launch {
                                     var ivx = vx
@@ -355,10 +502,22 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 selEdge(s, true, w, e)
                 selEdge(w, false, s, n)
                 selEdge(e, false, s, n)
+                // faint fill while the whole box is on the visible side
+                val fillCorners = listOf(px(n, w), px(n, e), px(s, e), px(s, w))
+                if (fillCorners.all { it != null }) {
+                    val fillPath = Path()
+                    fillPath.moveTo(fillCorners[0]!!.x, fillCorners[0]!!.y)
+                    for (i in 1..3) fillPath.lineTo(fillCorners[i]!!.x, fillCorners[i]!!.y)
+                    fillPath.close()
+                    drawPath(fillPath, Accent.copy(alpha = 0.10f))
+                }
                 drawPath(selPath, Accent, style = Stroke(2.dp.toPx()))
-                // corner dots
-                for (corner in listOf(px(n, w), px(n, e), px(s, w), px(s, e))) {
-                    corner?.let { drawCircle(Accent, radius = 3.dp.toPx(), center = it) }
+                // corner handles (draggable)
+                for (corner in fillCorners) {
+                    corner?.let {
+                        drawCircle(Accent.copy(alpha = 0.35f), radius = 11.dp.toPx(), center = it)
+                        drawCircle(Color.White, radius = 3.5.dp.toPx(), center = it)
+                    }
                 }
                 // centre crosshair
                 px(selCLat, selCLon)?.let { c ->
@@ -367,19 +526,33 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 }
             }
 
-            // small centre readout
+            // recentre button
+            TextButton(
+                onClick = { spinToSelection() },
+                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding(),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text("Zur Auswahl", style = MaterialTheme.typography.labelSmall)
+            }
+
+            // centre readout
+            val kmLon = spanLon * 111.32 * cos(Math.toRadians(selCLat))
+            val kmLat = spanLat * 110.574
             Text(
-                "%.2f°, %.2f°".format(selCLon, selCLat),
+                "%.2f°, %.2f°\n%.0f × %.0f km".format(selCLon, selCLat, kmLon, kmLat),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                textAlign = TextAlign.End,
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(10.dp),
             )
 
             // gestures hint
             Text(
-                "Ziehen: Erde drehen · Pinch: Zoom · Tippen: Gebiet setzen",
+                "Ziehen: Erde drehen · Box ziehen: verschieben · Ecken ziehen: Größe\n" +
+                    "Tippen: Gebiet hierher · Doppeltipp: reinzoomen · Zwei-Finger-Tipp: rauszoomen",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                textAlign = TextAlign.Center,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(6.dp),
             )
 
@@ -401,6 +574,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -423,16 +598,25 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             }
 
             when (state.source) {
-                DataSource.EMODNET -> OutlinedButton(
-                    onClick = { vm.setCoverageIndex(state.coverageIndex + 1) },
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        "Datensatz: ${EmodnetWcs.COVERAGES[state.coverageIndex].label}",
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                    )
+                DataSource.EMODNET -> {
+                    OutlinedButton(
+                        onClick = { vm.setCoverageIndex(state.coverageIndex + 1) },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            "Datensatz: ${EmodnetWcs.COVERAGES[state.coverageIndex].label}",
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                        )
+                    }
+                    if (selCLat < 10.8 || selCLat > 84.6 || selCLon < -70.5 || selCLon > 43.0) {
+                        Text(
+                            "Mittelpunkt liegt außerhalb des EMODnet-Gebiets (Europa/Atlantik). Für Weltgebiete GEBCO wählen.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
                 DataSource.GEBCO -> Text(
                     (state.gebcoInfo ?: "Weltweite Abdeckung, 15″: der Server schneidet das Gebiet zu."),
@@ -452,6 +636,11 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             // size slider (log scale)
             val k = (spanLon / 6.0).coerceIn(K_MIN, K_MAX)
             val sliderPos = ((log10(k) - log10(K_MIN)) / (log10(K_MAX) - log10(K_MIN))).toFloat()
+            val spanTxt = if (spanLon < 1.0) {
+                "%.2f°×%.2f°".format(spanLon, spanLat)
+            } else {
+                "%.1f°×%.1f°".format(spanLon, spanLat)
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Gebiet", style = MaterialTheme.typography.labelMedium)
                 Slider(
@@ -460,12 +649,13 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                         val kk = 10.0.pow(log10(K_MIN) + p * (log10(K_MAX) - log10(K_MIN)))
                         vm.scaleSelection(kk)
                     },
+                    onValueChangeFinished = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    "%.1f°×%.1f°".format(spanLon, spanLat),
+                    spanTxt,
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.size(width = 56.dp, height = 20.dp),
+                    modifier = Modifier.size(width = 64.dp, height = 20.dp),
                 )
             }
 
@@ -476,13 +666,14 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 Slider(
                     value = widthPx.toFloat().coerceIn(100f, 2048f),
                     onValueChange = { vm.setWidthPx(it.toInt().coerceIn(100, 2048).toString()) },
+                    onValueChangeFinished = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
                     valueRange = 100f..2048f,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     "$widthPx px",
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.size(width = 56.dp, height = 20.dp),
+                    modifier = Modifier.size(width = 64.dp, height = 20.dp),
                 )
             }
 

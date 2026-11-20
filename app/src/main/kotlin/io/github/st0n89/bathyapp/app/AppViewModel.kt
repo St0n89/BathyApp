@@ -191,6 +191,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Sets the raw selection spans (in degrees) around the current centre,
+     * used by the globe's corner-handle resize gesture.
+     */
+    fun setSpans(spanLon: Double, spanLat: Double) {
+        update { st ->
+            val sLon = spanLon.coerceIn(0.02, 170.0)
+            val sLat = spanLat.coerceIn(0.02, 170.0)
+            val b = GlobeMath.bboxAround(centreLatOf(st), centreLonOf(st), sLon, sLat)
+            st.copy(west = fmt(b[0]), south = fmt(b[1]), east = fmt(b[2]), north = fmt(b[3]))
+        }
+    }
+
     private fun spanLonOf(st: AppUiState): Double {
         val w = st.west.trim().toDoubleOrNull() ?: return 6.0
         val e = st.east.trim().toDoubleOrNull() ?: return 6.0
