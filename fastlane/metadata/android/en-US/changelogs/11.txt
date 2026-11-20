@@ -1,1 +1,1 @@
-Much sharper globe: Natural Earth texture at four times the previous resolution (5760 x 2880), bilinear texture filtering for clean coastlines at deep zoom, and after every gesture the app re-renders the visible hemisphere in the background at screen resolution.
+Globe at full Natural Earth source resolution (10800 x 5400, about 3.7 km per pixel), bilinear texture filtering for clean coastlines at deep zoom, and after every gesture the app re-renders the visible hemisphere in the background at screen resolution.
