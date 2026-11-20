@@ -2,6 +2,7 @@ package io.github.st0n89.bathyapp.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -23,6 +24,12 @@ class MainActivity : ComponentActivity() {
 fun AppRoot() {
     val vm: AppViewModel = viewModel()
     val state by vm.state.collectAsState()
+
+    // Android back: Profile -> Map -> Home, only Home exits.
+    // The last enabled BackHandler wins, so register the more specific one first.
+    BackHandler(enabled = state.screen == AppScreen.Profile) { vm.goToMap() }
+    BackHandler(enabled = state.screen == AppScreen.Map) { vm.goHome() }
+
     when (state.screen) {
         AppScreen.Home -> HomeScreen(vm, state)
         AppScreen.Map -> MapScreen(vm, state)
