@@ -40,7 +40,7 @@ sealed interface AppScreen {
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Home,
-    val source: DataSource = DataSource.EMODNET,
+    val source: DataSource = DataSource.GEBCO,
     val coverageIndex: Int = 0,
     val west: String = "3.0",
     val south: String = "53.5",

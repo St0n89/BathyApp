@@ -63,7 +63,7 @@ import androidx.compose.ui.unit.dp
 import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.geo.Coastlines
 import io.github.st0n89.bathyapp.core.geo.GlobeMath
-import io.github.st0n89.bathyapp.core.geo.LandRaster
+import io.github.st0n89.bathyapp.core.geo.GlobeColors
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -87,10 +87,6 @@ private const val K_MAX = 20.0
 /** Globe zoom bounds (0.8 fits the whole disc, 400 is enough for ~1 km areas). */
 private const val ZOOM_MIN = 0.8f
 private const val ZOOM_MAX = 400f
-
-/** Land/sea mask raster resolution (equirectangular). */
-private const val MASK_W = 1440
-private const val MASK_H = 720
 
 /** Pixel budget for the shaded-sphere bitmap (rendered each frame). */
 private const val SHADE_PIXELS = 160_000
@@ -142,9 +138,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     val coasts = remember {
         runCatching { context.assets.open("coast_50m.txt").use { Coastlines.read(it) } }.getOrNull()
     }
-    val landMask = remember {
-        val land = runCatching { context.assets.open("land_50m.txt").use { Coastlines.read(it, "NELAND") } }.getOrNull()
-        if (land == null) null else LandRaster.rasterize(land, MASK_W, MASK_H)
+    val globeTex = remember {
+        runCatching { context.assets.open("ne1_50m.txt").use { GlobeColors.read(it) } }.getOrNull()
     }
 
     // Shaded sphere: half-resolution android bitmap redrawn when the view changes.
@@ -165,10 +160,10 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             )
         }
     }
-    remember(landMask, shadeBuf, centerLat, centerLon, zoom) {
+    remember(globeTex, shadeBuf, centerLat, centerLon) {
         val b = shadeBuf
-        val m = landMask
-        if (b != null && m != null) renderShadedSphere(b, m, MASK_W, MASK_H, centerLat, centerLon, zoom)
+        val m = globeTex
+        if (b != null && m != null) renderShadedSphere(b, m, centerLat, centerLon)
     }
 
     fun applyDrag(dxPx: Float, dyPx: Float) {
@@ -446,7 +441,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 )
 
                 // ---- shaded land/sea sphere (stretched onto the disc) ----
-                if (shadeBuf != null && landMask != null) {
+                if (shadeBuf != null && globeTex != null) {
                     drawImage(
                         image = shadeBuf.bmp.asImageBitmap(),
                         srcOffset = IntOffset.Zero,
@@ -584,13 +579,25 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 }
             }
 
-            // recentre button
-            TextButton(
-                onClick = { spinToSelection() },
-                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding(),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-            ) {
-                Text("Zur Auswahl", style = MaterialTheme.typography.labelSmall)
+            // recentre button + active data source label
+            val sourceLabel = when (state.source) {
+                DataSource.EMODNET -> "Quelle: EMODnet (${EmodnetWcs.COVERAGES[state.coverageIndex].id})"
+                DataSource.GEBCO -> "Quelle: ${(state.gebcoInfo ?: "GEBCO 2026 (online)").substringBefore(',')}"
+                DataSource.LOCAL_FILE -> "Quelle: ${state.localFileName ?: "NetCDF/GeoTIFF"}"
+            }
+            Column(modifier = Modifier.align(Alignment.TopStart).statusBarsPadding()) {
+                TextButton(
+                    onClick = { spinToSelection() },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text("Zur Auswahl", style = MaterialTheme.typography.labelSmall)
+                }
+                Text(
+                    sourceLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(start = 10.dp, end = 4.dp),
+                )
             }
 
             // centre readout
@@ -783,17 +790,15 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
 private class ShadeBuffer(val bmp: android.graphics.Bitmap, val px: IntArray)
 
 /**
- * Software-renders the visible hemisphere with per-pixel inverse orthographic projection,
- * a land/sea mask lookup and diffuse day-side shading (light from upper left).
+ * Software-renders the visible hemisphere with per-pixel inverse orthographic
+ * projection onto the Natural Earth I palette texture (land cover + shaded
+ * relief + water), with a gentle day-side sphere shading on top (upper left).
  */
 private fun renderShadedSphere(
     buf: ShadeBuffer,
-    mask: ByteArray,
-    maskW: Int,
-    maskH: Int,
+    tex: GlobeColors,
     lat0: Double,
     lon0: Double,
-    zoom: Float,
 ) {
     val w = buf.bmp.width
     val h = buf.bmp.height
@@ -806,13 +811,8 @@ private fun renderShadedSphere(
     val lx = -0.38
     val ly = 0.42
     val lz = 0.82
-    // Base colors: deep ocean blue, dark sage green land.
-    val oceanR = 13
-    val oceanG = 34
-    val oceanB = 61
-    val landR = 86
-    val landG = 100
-    val landB = 78
+    val maskW = tex.w
+    val maskH = tex.h
     var i = 0
     for (jy in 0 until h) {
         // Normalized device coordinates on [-1, 1] with y pointing north.
@@ -836,13 +836,13 @@ private fun renderShadedSphere(
             val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
             val mi = (((lonD + 180.0) / 360.0) * maskW).toInt().coerceIn(0, maskW - 1)
             val mj = (((90.0 - latD) / 180.0) * maskH).toInt().coerceIn(0, maskH - 1)
-            val isLand = mask[mj * maskW + mi] != 0.toByte()
-            // Surface normal in view space (towards the observer hemisphere); nz from above.
+            val argb = tex.sample(mi, mj)
+            // Gentle sphere shading; the texture already carries its own relief.
             val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
-            val k = 0.42 + 0.58 * diff
-            val r = ((if (isLand) landR else oceanR) * k).toInt().coerceIn(0, 255)
-            val g = ((if (isLand) landG else oceanG) * k).toInt().coerceIn(0, 255)
-            val b = ((if (isLand) landB else oceanB) * k).toInt().coerceIn(0, 255)
+            val k = 0.72 + 0.28 * diff
+            val r = (((argb shr 16) and 0xFF) * k).toInt().coerceIn(0, 255)
+            val g = (((argb shr 8) and 0xFF) * k).toInt().coerceIn(0, 255)
+            val b = ((argb and 0xFF) * k).toInt().coerceIn(0, 255)
             px[i++] = 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
         }
     }
