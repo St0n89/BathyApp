@@ -35,7 +35,7 @@ Repo: https://github.com/St0n89/BathyApp.git
 Builds:
   - versionName: 0.6.0
     versionCode: 11
-    commit: 9c3a87896d7e5e7513c954384faaea6de438a86e
+    commit: fcbff991982738c854640ce07fb28be4974dad13
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release.apk
