@@ -24,19 +24,116 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
      * Bilinear texture lookup at fractional mask coordinates: pixel centers sit
      * at integers, [x] in [0, w-1], [y] in [0, h-1] (values are clamped).
      */
-    fun sampleBilinear(x: Double, y: Double): Int {
-        val xf = x.coerceIn(0.0, (w - 1).toDouble())
-        val yf = y.coerceIn(0.0, (h - 1).toDouble())
+    fun sampleBilinear(x: Double, y: Double): Int = bilinear(idx, w, h, x, y)
+
+    // ------------------------------------------------------------------
+    // Mip levels (software mimicking): the software renderer samples the full
+    // texture through small buffers (a 400-px motion buffer against a 5400-px
+    // hemisphere). Single-point bilinear lookups at that ratio alias badly: the
+    // baked hillshade relief crawls and shimmers while the view moves. Sampled
+    // from a box-filtered mip level instead, the result is stable. Levels are
+    // palette-indexed, so each 2x2 average is snapped back to the nearest
+    // palette colour via a 32^3 lookup lattice.
+    // ------------------------------------------------------------------
+
+    /** Level 0 is [idx] itself; each higher level halves both axes. >= 1. */
+    val lodCount: Int
+
+    private val lodData: Array<ByteArray>
+    private val lodWidths: IntArray
+    private val lodHeights: IntArray
+
+    init {
+        val levels = ArrayList<ByteArray>()
+        val ws = ArrayList<Int>()
+        val hs = ArrayList<Int>()
+        levels.add(idx); ws.add(w); hs.add(h)
+        if (w >= 16 && h >= 16) {
+            val latN = 32
+            val lattice = IntArray(latN * latN * latN)
+            for (r in 0 until latN) {
+                for (g in 0 until latN) {
+                    for (b in 0 until latN) {
+                        val rr = r * 8 + 4
+                        val gg = g * 8 + 4
+                        val bb = b * 8 + 4
+                        var best = 0
+                        var bestD = Int.MAX_VALUE
+                        for (k in palette.indices) {
+                            val c = palette[k]
+                            val dr = rr - ((c shr 16) and 0xFF)
+                            val dg = gg - ((c shr 8) and 0xFF)
+                            val db = bb - (c and 0xFF)
+                            val d = dr * dr + dg * dg + db * db
+                            if (d < bestD) { bestD = d; best = k }
+                        }
+                        lattice[(r * latN + g) * latN + b] = best
+                    }
+                }
+            }
+            var cw = w
+            var ch = h
+            var cur = idx
+            while (cw >= 16 && ch >= 16) {
+                val nw = cw / 2
+                val nh = ch / 2
+                val nxt = ByteArray(nw * nh)
+                for (j in 0 until nh) {
+                    val o0 = (2 * j) * cw
+                    val o1 = o0 + cw
+                    val no = j * nw
+                    for (i in 0 until nw) {
+                        val c0 = palette[cur[o0 + 2 * i].toInt() and 0xFF]
+                        val c1 = palette[cur[o0 + 2 * i + 1].toInt() and 0xFF]
+                        val c2 = palette[cur[o1 + 2 * i].toInt() and 0xFF]
+                        val c3 = palette[cur[o1 + 2 * i + 1].toInt() and 0xFF]
+                        val rs = ((c0 shr 16) and 0xFF) + ((c1 shr 16) and 0xFF) +
+                            ((c2 shr 16) and 0xFF) + ((c3 shr 16) and 0xFF)
+                        val gs = ((c0 shr 8) and 0xFF) + ((c1 shr 8) and 0xFF) +
+                            ((c2 shr 8) and 0xFF) + ((c3 shr 8) and 0xFF)
+                        val bs = (c0 and 0xFF) + (c1 and 0xFF) + (c2 and 0xFF) + (c3 and 0xFF)
+                        val v = lattice[(((rs ushr 5) * latN + (gs ushr 5)) * latN + (bs ushr 5))]
+                        nxt[no + i] = v.toByte()
+                    }
+                }
+                levels.add(nxt); ws.add(nw); hs.add(nh)
+                cw = nw; ch = nh; cur = nxt
+            }
+        }
+        lodData = levels.toTypedArray()
+        lodWidths = ws.toIntArray()
+        lodHeights = hs.toIntArray()
+        lodCount = lodData.size
+    }
+
+    /**
+     * Bilinear lookup on mip level [level] (0 = full resolution). [x]/[y] are
+     * level-0 texture coordinates with pixel centers at integers, exactly like
+     * [sampleBilinear]; they are mapped onto the level's own grid.
+     */
+    fun sampleBilinear(x: Double, y: Double, level: Int): Int {
+        require(level in 0 until lodCount) { "bad mip level $level/$lodCount" }
+        if (level == 0) return bilinear(idx, w, h, x, y)
+        val scale = 1 shl level
+        val lw = lodWidths[level]
+        val lh = lodHeights[level]
+        return bilinear(lodData[level], lw, lh, x / scale - 0.5, y / scale - 0.5)
+    }
+
+    /** Shared bilinear core over a palette-indexed level buffer. */
+    private fun bilinear(src: ByteArray, sw: Int, sh: Int, x: Double, y: Double): Int {
+        val xf = x.coerceIn(0.0, (sw - 1).toDouble())
+        val yf = y.coerceIn(0.0, (sh - 1).toDouble())
         val x0 = xf.toInt()
         val y0 = yf.toInt()
-        val x1 = if (x0 + 1 < w) x0 + 1 else x0
-        val y1 = if (y0 + 1 < h) y0 + 1 else y0
+        val x1 = if (x0 + 1 < sw) x0 + 1 else x0
+        val y1 = if (y0 + 1 < sh) y0 + 1 else y0
         val fx = xf - x0
         val fy = yf - y0
-        val c00 = sample(x0, y0)
-        val c10 = sample(x1, y0)
-        val c01 = sample(x0, y1)
-        val c11 = sample(x1, y1)
+        val c00 = palette[src[y0 * sw + x0].toInt() and 0xFF]
+        val c10 = palette[src[y0 * sw + x1].toInt() and 0xFF]
+        val c01 = palette[src[y1 * sw + x0].toInt() and 0xFF]
+        val c11 = palette[src[y1 * sw + x1].toInt() and 0xFF]
         fun top(a: Int, b: Int): Int = a + (((b - a) * fx + 0.5).toInt())
         fun pick(c: Int, shift: Int): Int = (c shr shift) and 0xFF
         val r0 = top(pick(c00, 16), pick(c10, 16))

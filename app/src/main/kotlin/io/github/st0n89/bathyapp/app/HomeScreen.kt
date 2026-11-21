@@ -2,6 +2,9 @@ package io.github.st0n89.bathyapp.app
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -128,6 +131,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     var zoom by remember { mutableStateOf(1f) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var detailBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val detailAlpha = remember { Animatable(0f) }
+    var interacting by remember { mutableStateOf(false) }
     var flingJob by remember { mutableStateOf<Job?>(null) }
     var showCoords by remember { mutableStateOf(false) }
     var lastTapUp by remember { mutableStateOf(0L) }
@@ -176,13 +181,27 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     remember(globeTex, shadeBuf, centerLat, centerLon) {
         val b = shadeBuf
         val m = globeTex
-        detailBmp = null // stale; the quick buffer covers the disc until the detail pass lands
         if (b != null && m != null) renderShadedSphere(b, m, centerLat, centerLon)
     }
 
-    // Idle high-detail pass: once the view settles for DETAIL_DELAY_MS, re-render the
-    // visible hemisphere at screen resolution (up to DETAIL_PIXELS) off the UI thread.
-    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize) {
+    // As soon as the view moves, softly retire the (now stale) detail render on
+    // top of the live quick buffer. Animating out instead of dropping it in one
+    // frame is what kills the sharp/blurry pop at movement start; the key set
+    // is the same, so every restart re-aims the animation at 0 from wherever it
+    // currently is.
+    LaunchedEffect(globeTex, centerLat, centerLon) {
+        if (detailBmp != null && detailAlpha.value > 0f) {
+            detailAlpha.animateTo(0f, tween(60, easing = LinearEasing))
+            detailBmp = null
+        }
+    }
+
+    // Idle high-detail pass: once the view settles for DETAIL_DELAY_MS (and no
+    // finger is down), re-render the visible hemisphere at screen resolution
+    // (up to DETAIL_PIXELS) off the UI thread, then crossfade it over the quick
+    // buffer so the sharpening is not a visible pop.
+    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize, interacting) {
+        if (interacting) return@LaunchedEffect
         val m = globeTex
         if (m == null || canvasSize.width < 2 || canvasSize.height < 2) return@LaunchedEffect
         delay(DETAIL_DELAY_MS)
@@ -198,7 +217,9 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 renderShadedSphere(ShadeBuffer(it, IntArray(side * side)), m, cl, co)
             }
         }
+        detailAlpha.snapTo(0f)
         detailBmp = bmp
+        detailAlpha.animateTo(1f, tween(160, easing = LinearEasing))
     }
 
     fun applyDrag(dxPx: Float, dyPx: Float) {
@@ -253,6 +274,9 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                         awaitEachGesture {
                             flingJob?.cancel()
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            // finger down: keep the settled detail render as-is and
+                            // suppress idle detail renders until the gesture ends
+                            interacting = true
 
                             // ---- geometry for this gesture (rPx fixed at down time) ----
                             val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
@@ -391,6 +415,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                                     zoom = (zoom / 1.6f).coerceIn(ZOOM_MIN, ZOOM_MAX)
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 }
+                                interacting = false
                                 return@awaitEachGesture
                             }
 
@@ -429,6 +454,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                                     }
                                 }
                             }
+                            // gesture finished: idle detail renders may fire again
+                            interacting = false
                         }
                     },
             ) {
@@ -476,15 +503,28 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 )
 
                 // ---- shaded land/sea sphere (stretched onto the disc) ----
-                // high-detail idle render if available, else the quick interaction buffer
-                val shade: android.graphics.Bitmap? = detailBmp ?: shadeBuf?.bmp
-                if (shade != null) {
+                // quick interaction buffer always underneath...
+                shadeBuf?.bmp?.let {
                     drawImage(
-                        image = shade.asImageBitmap(),
+                        image = it.asImageBitmap(),
                         srcOffset = IntOffset.Zero,
-                        srcSize = IntSize(shade.width, shade.height),
+                        srcSize = IntSize(it.width, it.height),
                         dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
                         dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
+                        filterQuality = FilterQuality.Medium,
+                    )
+                }
+                // ...and the idle high-detail render crossfading in over it
+                val dAlpha = detailAlpha.value
+                val dbmp = detailBmp
+                if (dbmp != null && dAlpha > 0f) {
+                    drawImage(
+                        image = dbmp.asImageBitmap(),
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(dbmp.width, dbmp.height),
+                        dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
+                        dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
+                        alpha = dAlpha,
                         filterQuality = FilterQuality.Medium,
                     )
                 }
@@ -850,6 +890,15 @@ private fun renderShadedSphere(
     val lz = 0.82
     val maskW = tex.w
     val maskH = tex.h
+    // Mip selection: this buffer spans a full hemisphere, i.e. maskW/2 texture
+    // columns across its width. Sampling the full-res texture through a small
+    // buffer aliases (the baked relief shimmers while the view moves), so pick
+    // the mip level whose texels are about one buffer pixel; one level finer
+    // near the limb, where the orthographic footprint stretches by 1/nz.
+    val maxLod = tex.lodCount - 1
+    var lod = 0
+    var foot = maskW / 2.0 / w
+    while (foot > 1.0 && lod < maxLod) { foot *= 0.5; lod++ }
     var i = 0
     for (jy in 0 until h) {
         // Normalized device coordinates on [-1, 1] with y pointing north.
@@ -875,7 +924,8 @@ private fun renderShadedSphere(
             // keeps coastlines and relief smooth when the texture is magnified.
             val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
             val my = ((90.0 - latD) / 180.0) * maskH - 0.5
-            val argb = tex.sampleBilinear(mx, my)
+            val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
+            val argb = tex.sampleBilinear(mx, my, lvl)
             // Gentle sphere shading; the texture already carries its own relief.
             val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
             val k = 0.72 + 0.28 * diff
