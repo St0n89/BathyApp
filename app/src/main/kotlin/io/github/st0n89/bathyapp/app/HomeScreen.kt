@@ -181,6 +181,13 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         }
     }
     remember(globeTex, shadeBuf, centerLat, centerLon, zoom, canvasSize) {
+        // Any view change invalidates the windowed detail render: kill it in
+        // the SAME frame, no fade-out. The quick render beneath is drawn from
+        // the very same center, so it is aligned with the vectors by
+        // construction; a fading stale bitmap, by contrast, lags behind the
+        // moving globe and reads as ghost relief disaligned from the coastlines.
+        detailBmp = null
+        detailWin = null
         val b = shadeBuf
         val m = globeTex
         if (b != null && m != null && canvasSize.width > 0 && canvasSize.height > 0) {
@@ -190,19 +197,6 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
             val qwin = visibleWindow(canvasSize.width, canvasSize.height, rPx)
             renderShadedSphere(b, m, centerLat, centerLon, qwin[0], qwin[1], qwin[2], qwin[3])
-        }
-    }
-
-    // As soon as the view moves, softly retire the (now stale) detail render on
-    // top of the live quick buffer. Animating out instead of dropping it in one
-    // frame is what kills the sharp/blurry pop at movement start; the key set
-    // is the same, so every restart re-aims the animation at 0 from wherever it
-    // currently is.
-    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize) {
-        if (detailBmp != null && detailAlpha.value > 0f) {
-            detailAlpha.animateTo(0f, tween(60, easing = LinearEasing))
-            detailBmp = null
-            detailWin = null
         }
     }
 
