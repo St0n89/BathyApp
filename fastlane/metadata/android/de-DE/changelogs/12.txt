@@ -1,0 +1,1 @@
+Globustextur auf das Natural-Earth-10m-Raster (High-Resolution) hochgerüstet: 21600 x 10800, etwa 1.85 km pro Pixel, 4-mal mehr Details als die bisherige Textur in voller Quellauflösung. Gelände- und Küstendetails halten beim Hineinzoomen deutlich länger durch. Die Textur wird jetzt im Hintergrund geladen, die App bleibt beim Einlesen reaktionsschnell.

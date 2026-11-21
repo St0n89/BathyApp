@@ -1,0 +1,1 @@
+Globe texture upgraded to the Natural Earth 10m (high-resolution) raster: 21600 x 10800, about 1.85 km per pixel, 4x the detail of the previous full-resolution texture. Terrain and coastline detail holds up much better when zoomed in. The texture loads in the background now, so the app stays responsive while it parses.

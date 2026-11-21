@@ -158,8 +158,15 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     val coasts = remember {
         runCatching { context.assets.open("coast_50m.txt").use { Coastlines.read(it) } }.getOrNull()
     }
-    val globeTex = remember {
-        runCatching { GlobeColors.read("ne1_50m.txt") { p -> context.assets.open(p) } }.getOrNull()
+    // The 21600x10800 texture parses and builds its mip pyramid in several
+    // seconds; doing that inside remember() would freeze composition (input
+    // dispatch timeout risk). Load it off the main thread instead; until it
+    // arrives the globe draws vectors only, same as the missing-asset path.
+    var globeTex by remember { mutableStateOf<GlobeColors?>(null) }
+    LaunchedEffect(Unit) {
+        globeTex = withContext(Dispatchers.Default) {
+            runCatching { GlobeColors.read("ne1_50m.txt") { p -> context.assets.open(p) } }.getOrNull()
+        }
     }
 
     // Shaded sphere: half-resolution android bitmap redrawn when the view changes.

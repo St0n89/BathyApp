@@ -151,9 +151,9 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
     companion object {
 
         /**
-         * Whitespace-separated manual scanner: the text asset can be several MB
-         * with more than a million tokens; String.split() would allocate one
-         * String per token.
+         * Whitespace-separated manual scanner: the text asset can run to tens
+         * of MB with hundreds of millions of characters; String.split() would
+         * allocate one String per token.
          */
         private class Scanner(val s: String) {
             val n = s.length
@@ -230,8 +230,8 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
             val w = sc.nextInt("width")
             val h = sc.nextInt("height")
             val p = sc.nextInt("palette size")
-            require(w in 1..19200 && h in 1..19200) { "bad texture size ${w}x$h" }
-            require(w.toLong() * h <= 80_000_000L) { "texture too large: ${w}x$h" }
+            require(w in 1..23040 && h in 1..23040) { "bad texture size ${w}x$h" }
+            require(w.toLong() * h <= 240_000_000L) { "texture too large: ${w}x$h" }
             require(p in 1..4096) { "bad palette size: $p" }
             return Triple(w, h, p)
         }
@@ -262,7 +262,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
 
             val (w, h, p) = parseHeader0(sc)
             val shardCount = sc.nextInt("shard count")
-            require(shardCount in 1..64) { "bad shard count: $shardCount" }
+            require(shardCount in 1..128) { "bad shard count: $shardCount" }
             val palette = parsePalette(sc, p)
             val idx = ByteArray(w * h)
             var row = fillRows(sc, idx, w, h, 0, p)
