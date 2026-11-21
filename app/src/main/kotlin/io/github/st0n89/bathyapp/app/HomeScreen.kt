@@ -99,7 +99,7 @@ private const val SHADE_PIXELS = 160_000
 
 /**
  * Camera pixel budget for the idle high-detail redraw: after gestures/flings settle,
- * the visible hemisphere is re-rendered at screen resolution in the background.
+ * the visible window is re-rendered at screen resolution in the background.
  */
 private const val DETAIL_PIXELS = 1_300_000L
 
@@ -131,6 +131,8 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     var zoom by remember { mutableStateOf(1f) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var detailBmp by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    /** Disc-coord window [gx0, gy0, gx1, gy1] the detail bitmap was rendered for. */
+    var detailWin by remember { mutableStateOf<FloatArray?>(null) }
     val detailAlpha = remember { Animatable(0f) }
     var interacting by remember { mutableStateOf(false) }
     var flingJob by remember { mutableStateOf<Job?>(null) }
@@ -178,10 +180,17 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             )
         }
     }
-    remember(globeTex, shadeBuf, centerLat, centerLon) {
+    remember(globeTex, shadeBuf, centerLat, centerLon, zoom, canvasSize) {
         val b = shadeBuf
         val m = globeTex
-        if (b != null && m != null) renderShadedSphere(b, m, centerLat, centerLon)
+        if (b != null && m != null && canvasSize.width > 0 && canvasSize.height > 0) {
+            // zoomed in, only the visible window is rendered: buffer pixels then
+            // cover a small part of the globe instead of stretching a whole-
+            // hemisphere render across the screen
+            val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
+            val qwin = visibleWindow(canvasSize.width, canvasSize.height, rPx)
+            renderShadedSphere(b, m, centerLat, centerLon, qwin[0], qwin[1], qwin[2], qwin[3])
+        }
     }
 
     // As soon as the view moves, softly retire the (now stale) detail render on
@@ -189,36 +198,45 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     // frame is what kills the sharp/blurry pop at movement start; the key set
     // is the same, so every restart re-aims the animation at 0 from wherever it
     // currently is.
-    LaunchedEffect(globeTex, centerLat, centerLon) {
+    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize) {
         if (detailBmp != null && detailAlpha.value > 0f) {
             detailAlpha.animateTo(0f, tween(60, easing = LinearEasing))
             detailBmp = null
+            detailWin = null
         }
     }
 
     // Idle high-detail pass: once the view settles for DETAIL_DELAY_MS (and no
-    // finger is down), re-render the visible hemisphere at screen resolution
-    // (up to DETAIL_PIXELS) off the UI thread, then crossfade it over the quick
-    // buffer so the sharpening is not a visible pop.
+    // finger is down), re-render the visible window at screen resolution (up to
+    // DETAIL_PIXELS) off the UI thread, then crossfade it over the quick
+    // buffer so the sharpening is not a visible pop. At high zoom the window
+    // is a small patch of the globe, so the texture is sampled near source
+    // resolution instead of blowing up a whole-hemisphere bitmap.
     LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize, interacting) {
         if (interacting) return@LaunchedEffect
         val m = globeTex
         if (m == null || canvasSize.width < 2 || canvasSize.height < 2) return@LaunchedEffect
         delay(DETAIL_DELAY_MS)
         val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
-        var side = (2f * rPx).toInt().coerceAtLeast(16)
-        if (side.toLong() * side > DETAIL_PIXELS) {
-            side = kotlin.math.sqrt(DETAIL_PIXELS.toDouble()).toInt()
+        val win = visibleWindow(canvasSize.width, canvasSize.height, rPx)
+        var bw = ((win[2] - win[0]) * rPx).toInt().coerceAtLeast(16)
+        var bh = ((win[3] - win[1]) * rPx).toInt().coerceAtLeast(16)
+        if (bw.toLong() * bh > DETAIL_PIXELS) {
+            val f = kotlin.math.sqrt(DETAIL_PIXELS.toDouble() / (bw.toLong() * bh))
+            bw = (bw * f).toInt().coerceAtLeast(16)
+            bh = (bh * f).toInt().coerceAtLeast(16)
         }
         val cl = centerLat
         val co = centerLon
+        val g0 = win[0]; val g1 = win[1]; val g2 = win[2]; val g3 = win[3]
         val bmp = withContext(Dispatchers.Default) {
-            android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888).also {
-                renderShadedSphere(ShadeBuffer(it, IntArray(side * side)), m, cl, co)
+            android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888).also {
+                renderShadedSphere(ShadeBuffer(it, IntArray(bw * bh)), m, cl, co, g0, g1, g2, g3)
             }
         }
         detailAlpha.snapTo(0f)
         detailBmp = bmp
+        detailWin = floatArrayOf(g0.toFloat(), g1.toFloat(), g2.toFloat(), g3.toFloat())
         detailAlpha.animateTo(1f, tween(160, easing = LinearEasing))
     }
 
@@ -505,25 +523,32 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                 // ---- shaded land/sea sphere (stretched onto the disc) ----
                 // quick interaction buffer always underneath...
                 shadeBuf?.bmp?.let {
+                    val qwin = visibleWindow(canvasSize.width, canvasSize.height, r)
+                    val (qo, qs) = windowDst(qwin, cx, cy, r)
                     drawImage(
                         image = it.asImageBitmap(),
                         srcOffset = IntOffset.Zero,
                         srcSize = IntSize(it.width, it.height),
-                        dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
-                        dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
+                        dstOffset = qo,
+                        dstSize = qs,
                         filterQuality = FilterQuality.Medium,
                     )
                 }
                 // ...and the idle high-detail render crossfading in over it
                 val dAlpha = detailAlpha.value
                 val dbmp = detailBmp
-                if (dbmp != null && dAlpha > 0f) {
+                val dwin = detailWin
+                if (dbmp != null && dAlpha > 0f && dwin != null) {
+                    val (do_, ds) = windowDst(
+                        doubleArrayOf(dwin[0].toDouble(), dwin[1].toDouble(), dwin[2].toDouble(), dwin[3].toDouble()),
+                        cx, cy, r,
+                    )
                     drawImage(
                         image = dbmp.asImageBitmap(),
                         srcOffset = IntOffset.Zero,
                         srcSize = IntSize(dbmp.width, dbmp.height),
-                        dstOffset = IntOffset((cx - r).toInt(), (cy - r).toInt()),
-                        dstSize = IntSize((r * 2f).toInt().coerceAtLeast(1), (r * 2f).toInt().coerceAtLeast(1)),
+                        dstOffset = do_,
+                        dstSize = ds,
                         alpha = dAlpha,
                         filterQuality = FilterQuality.Medium,
                     )
@@ -867,7 +892,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
 private class ShadeBuffer(val bmp: android.graphics.Bitmap, val px: IntArray)
 
 /**
- * Software-renders the visible hemisphere with per-pixel inverse orthographic
+ * Software-renders the given window of the visible hemisphere with per-pixel inverse orthographic
  * projection onto the Natural Earth I palette texture (land cover + shaded
  * relief + water), with a gentle day-side sphere shading on top (upper left).
  */
@@ -876,6 +901,10 @@ private fun renderShadedSphere(
     tex: GlobeColors,
     lat0: Double,
     lon0: Double,
+    gx0: Double = -1.0,
+    gy0: Double = -1.0,
+    gx1: Double = 1.0,
+    gy1: Double = 1.0,
 ) {
     val w = buf.bmp.width
     val h = buf.bmp.height
@@ -890,21 +919,23 @@ private fun renderShadedSphere(
     val lz = 0.82
     val maskW = tex.w
     val maskH = tex.h
-    // Mip selection: this buffer spans a full hemisphere, i.e. maskW/2 texture
-    // columns across its width. Sampling the full-res texture through a small
+    // Mip selection: one buffer pixel spans about this many texture texels near
+    // the window centre (the full disc spans maskW/2 texels over gx in [-1, 1]).
     // buffer aliases (the baked relief shimmers while the view moves), so pick
     // the mip level whose texels are about one buffer pixel; one level finer
     // near the limb, where the orthographic footprint stretches by 1/nz.
     val maxLod = tex.lodCount - 1
     var lod = 0
-    var foot = maskW / 2.0 / w
+    var foot = (gx1 - gx0) * maskW / 4.0 / w
     while (foot > 1.0 && lod < maxLod) { foot *= 0.5; lod++ }
+    val gxSpan = gx1 - gx0
+    val gySpan = gy1 - gy0
     var i = 0
     for (jy in 0 until h) {
-        // Normalized device coordinates on [-1, 1] with y pointing north.
-        val gy = 1.0 - 2.0 * (jy + 0.5) / h
+        // Window row jy: top edge is gy1, bottom edge is gy0, y pointing north.
+        val gy = gy1 - gySpan * (jy + 0.5) / h
         for (ix in 0 until w) {
-            val gx = 2.0 * (ix + 0.5) / w - 1.0
+            val gx = gx0 + gxSpan * (ix + 0.5) / w
             val rr = gx * gx + gy * gy
             if (rr > 1.0) {
                 px[i++] = 0 // transparent space
@@ -936,6 +967,27 @@ private fun renderShadedSphere(
         }
     }
     buf.bmp.setPixels(px, 0, w, 0, 0, w, h)
+}
+
+/**
+ * Visible part of the disc in normalized disc coordinates [gx0, gy0, gx1, gy1]
+ * (gx grows right, gy grows up, the disc is the unit circle). The screen is
+ * centred on the disc, so the window is symmetric; at low zoom the whole disc
+ * is visible and the window is [-1, 1] x [-1, 1].
+ */
+private fun visibleWindow(canvasW: Int, canvasH: Int, rPx: Float): DoubleArray {
+    val kx = if (rPx <= 1f) 1.0 else (canvasW / (2.0 * rPx)).coerceAtMost(1.0)
+    val ky = if (rPx <= 1f) 1.0 else (canvasH / (2.0 * rPx)).coerceAtMost(1.0)
+    return doubleArrayOf(-kx, -ky, kx, ky)
+}
+
+/** Screen rect (dst rect for drawImage) of a disc-coord window at the current view. */
+private fun windowDst(win: DoubleArray, cx: Float, cy: Float, r: Float): Pair<IntOffset, IntSize> {
+    val x = (cx + win[0].toFloat() * r).toInt()
+    val y = (cy - win[3].toFloat() * r).toInt()
+    val w = ((win[2] - win[0]).toFloat() * r).toInt().coerceAtLeast(1)
+    val h = ((win[3] - win[1]).toFloat() * r).toInt().coerceAtLeast(1)
+    return Pair(IntOffset(x, y), IntSize(w, h))
 }
 
 /** Shortest signed longitude delta from [from] to [to]. */
