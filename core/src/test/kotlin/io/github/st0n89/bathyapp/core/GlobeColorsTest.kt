@@ -188,4 +188,17 @@ class GlobeColorsTest {
         assertFailsWith<IllegalArgumentException> { t.sampleBilinear(5.0, 5.0, t.lodCount) }
         assertFailsWith<IllegalArgumentException> { t.sampleBilinear(5.0, 5.0, -1) }
     }
+
+    @Test
+    fun paletteBeyond256ColorsIsIndexed() {
+        // 300 colours: palette indices >= 256 must survive the index buffer
+        val sb = StringBuilder("NECOLR 3 1 300\n")
+        for (k in 0 until 300) sb.append("${k % 256} ${k / 256} ${(k * 3) % 256}\n")
+        sb.append("1 0 1 256 1 299\n")
+        val t = tex(sb.toString())
+        assertEquals(300, t.palette.size)
+        assertEquals(0xFF000000.toInt(), t.sample(0, 0))
+        assertEquals(0xFF000100.toInt(), t.sample(1, 0))
+        assertEquals(0xFF2B0181.toInt(), t.sample(2, 0))
+    }
 }

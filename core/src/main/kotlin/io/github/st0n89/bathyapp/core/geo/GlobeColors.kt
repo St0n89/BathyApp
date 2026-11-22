@@ -3,7 +3,8 @@ package io.github.st0n89.bathyapp.core.geo
 import java.io.InputStream
 
 /**
- * Equirectangular palette texture for the globe (Natural Earth I colors).
+ * Equirectangular palette texture for the globe (satellite true-color: NASA
+ * Blue Marble next generation with bathymetry).
  *
  * Plain-text token format like the coastline file. Single file:
  * "NECOLR <w> <h> <paletteCount>" then paletteCount entries "r g b" (0..255),
@@ -15,10 +16,10 @@ import java.io.InputStream
  * "_s<i>" inserted before the extension, i starting at 1) start
  * "NECOLRS <w> <h>" and carry the remaining rows in order.
  */
-class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteArray) {
+class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ShortArray) {
 
     /** Packed opaque ARGB at mask column [mi] and row [mj] (caller clamps). */
-    fun sample(mi: Int, mj: Int): Int = palette[idx[mj * w + mi].toInt() and 0xFF]
+    fun sample(mi: Int, mj: Int): Int = palette[idx[mj * w + mi].toInt() and 0xFFFF]
 
     /**
      * Bilinear texture lookup at fractional mask coordinates: pixel centers sit
@@ -39,12 +40,12 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
     /** Level 0 is [idx] itself; each higher level halves both axes. >= 1. */
     val lodCount: Int
 
-    private val lodData: Array<ByteArray>
+    private val lodData: Array<ShortArray>
     private val lodWidths: IntArray
     private val lodHeights: IntArray
 
     init {
-        val levels = ArrayList<ByteArray>()
+        val levels = ArrayList<ShortArray>()
         val ws = ArrayList<Int>()
         val hs = ArrayList<Int>()
         levels.add(idx); ws.add(w); hs.add(h)
@@ -77,23 +78,23 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
             while (cw >= 16 && ch >= 16) {
                 val nw = cw / 2
                 val nh = ch / 2
-                val nxt = ByteArray(nw * nh)
+                val nxt = ShortArray(nw * nh)
                 for (j in 0 until nh) {
                     val o0 = (2 * j) * cw
                     val o1 = o0 + cw
                     val no = j * nw
                     for (i in 0 until nw) {
-                        val c0 = palette[cur[o0 + 2 * i].toInt() and 0xFF]
-                        val c1 = palette[cur[o0 + 2 * i + 1].toInt() and 0xFF]
-                        val c2 = palette[cur[o1 + 2 * i].toInt() and 0xFF]
-                        val c3 = palette[cur[o1 + 2 * i + 1].toInt() and 0xFF]
+                        val c0 = palette[cur[o0 + 2 * i].toInt() and 0xFFFF]
+                        val c1 = palette[cur[o0 + 2 * i + 1].toInt() and 0xFFFF]
+                        val c2 = palette[cur[o1 + 2 * i].toInt() and 0xFFFF]
+                        val c3 = palette[cur[o1 + 2 * i + 1].toInt() and 0xFFFF]
                         val rs = ((c0 shr 16) and 0xFF) + ((c1 shr 16) and 0xFF) +
                             ((c2 shr 16) and 0xFF) + ((c3 shr 16) and 0xFF)
                         val gs = ((c0 shr 8) and 0xFF) + ((c1 shr 8) and 0xFF) +
                             ((c2 shr 8) and 0xFF) + ((c3 shr 8) and 0xFF)
                         val bs = (c0 and 0xFF) + (c1 and 0xFF) + (c2 and 0xFF) + (c3 and 0xFF)
                         val v = lattice[(((rs ushr 5) * latN + (gs ushr 5)) * latN + (bs ushr 5))]
-                        nxt[no + i] = v.toByte()
+                        nxt[no + i] = v.toShort()
                     }
                 }
                 levels.add(nxt); ws.add(nw); hs.add(nh)
@@ -121,7 +122,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
     }
 
     /** Shared bilinear core over a palette-indexed level buffer. */
-    private fun bilinear(src: ByteArray, sw: Int, sh: Int, x: Double, y: Double): Int {
+    private fun bilinear(src: ShortArray, sw: Int, sh: Int, x: Double, y: Double): Int {
         val xf = x.coerceIn(0.0, (sw - 1).toDouble())
         val yf = y.coerceIn(0.0, (sh - 1).toDouble())
         val x0 = xf.toInt()
@@ -130,10 +131,10 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
         val y1 = if (y0 + 1 < sh) y0 + 1 else y0
         val fx = xf - x0
         val fy = yf - y0
-        val c00 = palette[src[y0 * sw + x0].toInt() and 0xFF]
-        val c10 = palette[src[y0 * sw + x1].toInt() and 0xFF]
-        val c01 = palette[src[y1 * sw + x0].toInt() and 0xFF]
-        val c11 = palette[src[y1 * sw + x1].toInt() and 0xFF]
+        val c00 = palette[src[y0 * sw + x0].toInt() and 0xFFFF]
+        val c10 = palette[src[y0 * sw + x1].toInt() and 0xFFFF]
+        val c01 = palette[src[y1 * sw + x0].toInt() and 0xFFFF]
+        val c11 = palette[src[y1 * sw + x1].toInt() and 0xFFFF]
         fun top(a: Int, b: Int): Int = a + (((b - a) * fx + 0.5).toInt())
         fun pick(c: Int, shift: Int): Int = (c shr shift) and 0xFF
         val r0 = top(pick(c00, 16), pick(c10, 16))
@@ -207,7 +208,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
         }
 
         /** Fills RLE rows into [idx] starting at [row]; returns the new row count. */
-        private fun fillRows(sc: Scanner, idx: ByteArray, w: Int, h: Int, fromRow: Int, paletteSize: Int): Int {
+        private fun fillRows(sc: Scanner, idx: ShortArray, w: Int, h: Int, fromRow: Int, paletteSize: Int): Int {
             var row = fromRow
             while (row < h && sc.hasMore()) {
                 var x = 0
@@ -217,7 +218,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
                     val v = sc.nextInt("palette index")
                     require(run in 1..w && v < paletteSize) { "bad rle row $row" }
                     require(x + run <= w) { "rle overflow in row $row" }
-                    repeat(run) { q -> idx[off + x + q] = v.toByte() }
+                    repeat(run) { q -> idx[off + x + q] = v.toShort() }
                     x += run
                 }
                 row++
@@ -242,7 +243,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
             require(header == expectedHeader) { "bad file header, expected $expectedHeader" }
             val (w, h, p) = parseHeader0(sc)
             val palette = parsePalette(sc, p)
-            val idx = ByteArray(w * h)
+            val idx = ShortArray(w * h)
             val rows = fillRows(sc, idx, w, h, 0, p)
             require(rows == h) { "expected $h rows, got $rows" }
             require(!sc.hasMore()) { "trailing garbage in texture file" }
@@ -264,7 +265,7 @@ class GlobeColors(val w: Int, val h: Int, val palette: IntArray, val idx: ByteAr
             val shardCount = sc.nextInt("shard count")
             require(shardCount in 1..128) { "bad shard count: $shardCount" }
             val palette = parsePalette(sc, p)
-            val idx = ByteArray(w * h)
+            val idx = ShortArray(w * h)
             var row = fillRows(sc, idx, w, h, 0, p)
             require(row < h || shardCount == 1) { "extra rows in master shard" }
 

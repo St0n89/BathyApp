@@ -1,0 +1,1 @@
+Photographic satellite globe: the stylized Natural Earth colormap is replaced by NASA Blue Marble true-color imagery (July composite) with ocean bathymetry. 10800x5400 texture, 1024-color palette. Ice sheets, deserts and rainforests now look like real satellite photos.
