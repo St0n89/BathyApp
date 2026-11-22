@@ -1,6 +1,6 @@
 # F-Droid build recipe for BathyApp.
 # Submit this file as metadata/io.github.st0n89.bathyapp.yml in fdroiddata
-# (GitLab merge request), see https://f-droid.org/docs/Inclusion_How-To/
+# (GitLab merge request), see https://f-droid.org/docs/Inclusion_How_To/
 # Store-listing texts live in fastlane/metadata/android/ (en-US and de-DE).
 Categories:
   - Navigation
@@ -28,18 +28,18 @@ Description: |-
     crop clients are hand-written Kotlin, no binary blobs, no tracking.
 
     Data: GEBCO (https://www.gebco.net) and EMODnet
-    (https://emodnet.ec.europa.eu/en/bathymetry), used under their open
+    (https://emodnet-bathymetry.eu/en/bathymetry), used under their open
     licenses.
 RepoType: git
 Repo: https://github.com/St0n89/BathyApp.git
 Builds:
-  - versionName: 0.8.0
-    versionCode: 14
-    commit: 3027988f465784eb47ce5aa394641b94010bf476
+  - versionName: 0.8.1
+    versionCode: 15
+    commit: d431df4a6af6d7442a7bfcb15226f9a8ab9b39cc
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release.apk
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: 0.8.0
-CurrentVersionCode: 14
+CurrentVersion: 0.8.1
+CurrentVersionCode: 15
