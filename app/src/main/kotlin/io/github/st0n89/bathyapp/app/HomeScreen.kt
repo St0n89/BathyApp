@@ -232,7 +232,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         val g0 = win[0]; val g1 = win[1]; val g2 = win[2]; val g3 = win[3]
         val bmp = withContext(Dispatchers.Default) {
             android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888).also {
-                renderShadedSphere(ShadeBuffer(it, IntArray(bw * bh)), m, cl, co, g0, g1, g2, g3)
+                renderShadedSphere(ShadeBuffer(it, IntArray(bw * bh)), m, cl, co, g0, g1, g2, g3, ss = 2)
             }
         }
         detailAlpha.snapTo(0f)
@@ -906,6 +906,7 @@ private fun renderShadedSphere(
     gy0: Double = -1.0,
     gx1: Double = 1.0,
     gy1: Double = 1.0,
+    ss: Int = 1,
 ) {
     val w = buf.bmp.width
     val h = buf.bmp.height
@@ -928,43 +929,93 @@ private fun renderShadedSphere(
     val maxLod = tex.lodCount - 1
     var lod = 0
     var foot = (gx1 - gx0) * maskW / 4.0 / w
-    while (foot > 1.0 && lod < maxLod) { foot *= 0.5; lod++ }
+    // With ss-times supersampling each buffer pixel box-averages an ss x ss
+    // subpixel grid, so a level with up to ss texels per buffer pixel is safe
+    // and yields genuinely more texture detail than the single-sample pick.
+    while (foot > ss && lod < maxLod) { foot *= 0.5; lod++ }
     val gxSpan = gx1 - gx0
     val gySpan = gy1 - gy0
     var i = 0
-    for (jy in 0 until h) {
-        // Window row jy: top edge is gy1, bottom edge is gy0, y pointing north.
-        val gy = gy1 - gySpan * (jy + 0.5) / h
-        for (ix in 0 until w) {
-            val gx = gx0 + gxSpan * (ix + 0.5) / w
-            val rr = gx * gx + gy * gy
-            if (rr > 1.0) {
-                px[i++] = 0 // transparent space
-                continue
+    if (ss <= 1) {
+        for (jy in 0 until h) {
+            // Window row jy: top edge is gy1, bottom edge is gy0, y pointing north.
+            val gy = gy1 - gySpan * (jy + 0.5) / h
+            for (ix in 0 until w) {
+                val gx = gx0 + gxSpan * (ix + 0.5) / w
+                val rr = gx * gx + gy * gy
+                if (rr > 1.0) {
+                    px[i++] = 0 // transparent space
+                    continue
+                }
+                // Inverse orthographic in the (east, north, centre) view frame:
+                // P = gx*E + gy*N + nz*C, hence the surface point has
+                // sin(lat) = nz*sin(lat0) + gy*cos(lat0) and
+                // dlon = atan2(gx, cos(lat0)*nz - sin(lat0)*gy). Exact at the centre too.
+                val nz = sqrt((1.0 - rr).coerceAtLeast(0.0))
+                val sinPhi = nz * sinP0 + gy * cosP0
+                val phi = asin(sinPhi.coerceIn(-1.0, 1.0))
+                val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
+                val latD = phi * 180.0 / PI
+                val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
+                // Fractional mask coords (pixel centres at integers): bilinear lookup
+                // keeps coastlines and relief smooth when the texture is magnified.
+                val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
+                val my = ((90.0 - latD) / 180.0) * maskH - 0.5
+                val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
+                val argb = tex.sampleBilinear(mx, my, lvl)
+                // Gentle sphere shading; the texture already carries its own relief.
+                val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
+                val k = 0.72 + 0.28 * diff
+                val r = (((argb shr 16) and 0xFF) * k).toInt().coerceIn(0, 255)
+                val g = (((argb shr 8) and 0xFF) * k).toInt().coerceIn(0, 255)
+                val b = ((argb and 0xFF) * k).toInt().coerceIn(0, 255)
+                px[i++] = 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
             }
-            // Inverse orthographic in the (east, north, centre) view frame:
-            // P = gx*E + gy*N + nz*C, hence the surface point has
-            // sin(lat) = nz*sin(lat0) + gy*cos(lat0) and
-            // dlon = atan2(gx, cos(lat0)*nz - sin(lat0)*gy). Exact at the centre too.
-            val nz = sqrt((1.0 - rr).coerceAtLeast(0.0))
-            val sinPhi = nz * sinP0 + gy * cosP0
-            val phi = asin(sinPhi.coerceIn(-1.0, 1.0))
-            val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
-            val latD = phi * 180.0 / PI
-            val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
-            // Fractional mask coords (pixel centres at integers): bilinear lookup
-            // keeps coastlines and relief smooth when the texture is magnified.
-            val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
-            val my = ((90.0 - latD) / 180.0) * maskH - 0.5
-            val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
-            val argb = tex.sampleBilinear(mx, my, lvl)
-            // Gentle sphere shading; the texture already carries its own relief.
-            val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
-            val k = 0.72 + 0.28 * diff
-            val r = (((argb shr 16) and 0xFF) * k).toInt().coerceIn(0, 255)
-            val g = (((argb shr 8) and 0xFF) * k).toInt().coerceIn(0, 255)
-            val b = ((argb and 0xFF) * k).toInt().coerceIn(0, 255)
-            px[i++] = 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
+        }
+    } else {
+        // Supersampled idle-detail path: ss x ss subpixels per buffer pixel,
+        // each bilinear on the finer mip level chosen above; the per-pixel
+        // subpixel average is an approximate box filter, so magnified texture
+        // detail stays crisp without the single-sample mip mush.
+        for (jy in 0 until h) {
+            for (ix in 0 until w) {
+                var rAcc = 0.0
+                var gAcc = 0.0
+                var bAcc = 0.0
+                var nAcc = 0
+                for (sj in 0 until ss) {
+                    val gy = gy1 - gySpan * (jy + (sj + 0.5) / ss) / h
+                    for (si in 0 until ss) {
+                        val gx = gx0 + gxSpan * (ix + (si + 0.5) / ss) / w
+                        val rr = gx * gx + gy * gy
+                        if (rr > 1.0) continue
+                        val nz = sqrt((1.0 - rr).coerceAtLeast(0.0))
+                        val sinPhi = nz * sinP0 + gy * cosP0
+                        val phi = asin(sinPhi.coerceIn(-1.0, 1.0))
+                        val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
+                        val latD = phi * 180.0 / PI
+                        val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
+                        val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
+                        val my = ((90.0 - latD) / 180.0) * maskH - 0.5
+                        val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
+                        val argb = tex.sampleBilinear(mx, my, lvl)
+                        val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
+                        val k = 0.72 + 0.28 * diff
+                        rAcc += ((argb shr 16) and 0xFF) * k
+                        gAcc += ((argb shr 8) and 0xFF) * k
+                        bAcc += (argb and 0xFF) * k
+                        nAcc++
+                    }
+                }
+                if (nAcc == 0) {
+                    px[i++] = 0 // transparent space
+                } else {
+                    val r = (rAcc / nAcc + 0.5).toInt().coerceIn(0, 255)
+                    val g = (gAcc / nAcc + 0.5).toInt().coerceIn(0, 255)
+                    val b = (bAcc / nAcc + 0.5).toInt().coerceIn(0, 255)
+                    px[i++] = 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
+                }
+            }
         }
     }
     buf.bmp.setPixels(px, 0, w, 0, 0, w, h)

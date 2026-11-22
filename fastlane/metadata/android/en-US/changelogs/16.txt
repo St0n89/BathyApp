@@ -1,0 +1,1 @@
+Sharper globe at rest: the idle high-detail render now supersamples each screen pixel (2x2 subpixels) from a twice-as-fine texture level, so coastlines, islands and ocean-floor relief show noticeably more detail when zooming in. The interactive buffer stays fast and unchanged; the sharper image crossfades in about a second after you stop touching the globe.
