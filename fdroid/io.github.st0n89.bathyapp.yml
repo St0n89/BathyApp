@@ -22,8 +22,8 @@ Description: |-
     * EMODnet Bathymetry WCS (European waters, 3.75 arc-second)
     * local NetCDF (CDF-1/CDF-2) or float GeoTIFF files, fully offline
 
-    Features a rotating 3D globe with Natural Earth land/sea colors for area
-    selection, an interactive depth raster map, great-circle depth profiles
+    Features a rotating 3D globe with NASA Blue Marble satellite imagery and
+    bathymetry ocean shading for area selection, an interactive depth raster map, great-circle depth profiles
     with statistics, and GeoTIFF/CSV export. NetCDF, GeoTIFF, WCS and GEBCO
     crop clients are hand-written Kotlin, no binary blobs, no tracking.
 
@@ -35,7 +35,7 @@ Repo: https://github.com/St0n89/BathyApp.git
 Builds:
   - versionName: 0.8.2
     versionCode: 16
-    commit: 4049aa435ab8ebf81c8bebf3ac21ff7d90ebb85f
+    commit: 715b19dbbdba1199616cf2a53903d5e166a8e623
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release.apk
