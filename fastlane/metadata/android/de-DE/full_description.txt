@@ -6,7 +6,7 @@ Datenquellen:
 - Lokale Bathymetrie-Dateien (NetCDF CDF-1/CDF-2 oder Float-GeoTIFF), komplett offline
 
 Funktionen:
-- Drehbarer 3D-Globus mit Natural-Earth-Farben zur Gebietswahl, bis herunter zu wenigen Hundert Metern Spannweite
+- Drehbarer 3D-Globus mit NASA-Blue-Marble-Satellitenbildern und Bathymetrie-Ozeanfarben zur Gebietswahl, bis herunter zu wenigen Hundert Metern Spannweite
 - Interaktive Kartenansicht mit farbigem Tiefenraster, Pinch-Zoom und Schwenken
 - Großkreis-Tiefenprofil mit Diagramm, Wasser-Schattierung und Statistik
 - Export als GeoTIFF, Raster-CSV und Profil-CSV über die System-Dateiauswahl

@@ -6,7 +6,7 @@ Data sources:
 - Local bathymetry files (NetCDF CDF-1/CDF-2 or float GeoTIFF), fully offline
 
 Features:
-- Rotating 3D globe with Natural Earth land/sea colors to pick the survey area, down to a few hundred meters
+- Rotating 3D globe with NASA Blue Marble satellite imagery and bathymetry ocean shading to pick the survey area, down to a few hundred meters
 - Interactive map view with colored depth raster, pinch-zoom and pan
 - Great-circle depth profile with chart view, water body shading and summary statistics
 - Export GeoTIFF, grid CSV and profile CSV via the system file picker
