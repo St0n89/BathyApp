@@ -324,7 +324,7 @@ object FdtdExport {
                 "Grid       : ${d.nx} x ${d.nz} @ dx = dz = ${f(d.dx)} m (${PPW.toInt()} ppw at ${f(shot.f0)} Hz in water),",
                 "             free surface at z = 0 (sea level), PML 3 sides.",
                 "Warning(s) : " + (if (warnings.isEmpty()) "none" else warnings.joinToString(" | ")),
-                "Usage      : include(\"Fdtd2DElastic.jl\"); include(\"env.jl\"); include(\"source.jl\");",
+                "Usage      : include(\"Fdtd2DElastic.jl\"); using .Fdtd2DElastic; include(\"env.jl\"); include(\"source.jl\");",
                 "             out = run_fdtd(grid, sources, bc, tmax; monopoles = monopoles,",
                 "                 receivers = receivers, pml_width = pml_cells, check_f_max = check_f_max)",
             ),
