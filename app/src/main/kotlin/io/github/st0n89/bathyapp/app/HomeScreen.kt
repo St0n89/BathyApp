@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -67,6 +68,9 @@ import io.github.st0n89.bathyapp.core.emodnet.EmodnetWcs
 import io.github.st0n89.bathyapp.core.geo.Coastlines
 import io.github.st0n89.bathyapp.core.geo.GlobeMath
 import io.github.st0n89.bathyapp.core.geo.GlobeColors
+import io.github.st0n89.bathyapp.core.geo.TileMath
+import io.github.st0n89.bathyapp.core.geo.TileOverlay
+import io.github.st0n89.bathyapp.core.geo.composeTileOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -78,6 +82,7 @@ import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.log10
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
@@ -105,6 +110,18 @@ private const val DETAIL_PIXELS = 1_300_000L
 
 /** Debounce before the idle detail render kicks in. */
 private const val DETAIL_DELAY_MS = 220L
+
+/**
+ * Online satellite layer: debounce before tiles for the visible window are
+ * fetched (same settle rule as the detail pass, so drags do not spam ESRI).
+ */
+private const val SAT_DELAY_MS = 260L
+
+/**
+ * Lowest tile zoom worth fetching: below z7 the local 16384px texture is at
+ * least as sharp as ESRI's global mosaic, so overview views stay offline.
+ */
+private const val SAT_MIN_ZOOM = 6
 
 @Composable
 fun HomeScreen(vm: AppViewModel, state: AppUiState) {
@@ -140,6 +157,19 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     var lastTapUp by remember { mutableStateOf(0L) }
     var lastTapPos by remember { mutableStateOf(Offset.Zero) }
 
+    // ---- optional online satellite layer (ESRI World Imagery tiles) ----
+    val satSource = remember { EsriTileSource(context) }
+    /** Geo-referenced high-res patch over the globe; sampled like the texture. */
+    var satOverlay by remember { mutableStateOf<TileOverlay?>(null) }
+    var satStatus by remember { mutableStateOf<String?>(null) }
+    val satelliteOn = state.satelliteOnline
+    LaunchedEffect(satelliteOn) {
+        if (!satelliteOn) {
+            satOverlay = null
+            satStatus = null
+        }
+    }
+
     // Live snapshots for the gesture handler: pointerInput keeps the closure
     // it was created with, but MutableState reads always see current values.
     var snapW by remember { mutableStateOf(w) }
@@ -169,6 +199,57 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         }
     }
 
+    // Online satellite layer: once the view settles, determine the visible
+    // geographic bbox, pick a mercator tile zoom that beats the local
+    // texture there, and compose the tiles into one geo-referenced overlay
+    // bitmap. The overlay is sampled per-pixel by BOTH render passes, so it
+    // stays perfectly aligned with the coastlines while the globe moves; a
+    // cancelled fetch (view changed again) never publishes its result.
+    LaunchedEffect(satelliteOn, centerLat, centerLon, zoom, canvasSize) {
+        if (!satelliteOn || canvasSize.width < 2 || canvasSize.height < 2) return@LaunchedEffect
+        delay(SAT_DELAY_MS)
+        val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
+        val win = visibleWindow(canvasSize.width, canvasSize.height, rPx)
+        val cLat0 = centerLat
+        val cLon0 = centerLon
+        var latMin = 90.0
+        var latMax = -90.0
+        var lonMin = 1.0
+        var lonMax = -1.0
+        for (jy in 0..6) {
+            for (ix in 0..6) {
+                var gx = win[0] + (win[2] - win[0]) * ix / 6.0
+                var gy = win[1] + (win[3] - win[1]) * jy / 6.0
+                val rho = sqrt(gx * gx + gy * gy)
+                if (rho > 0.999) {
+                    val f = 0.999 / rho
+                    gx *= f
+                    gy *= f
+                }
+                val ll = GlobeMath.unprojectUnit(gx, gy, cLat0, cLon0) ?: continue
+                latMin = min(latMin, ll.first)
+                latMax = max(latMax, ll.first)
+                val rel = shortestLonDelta(cLon0, ll.second)
+                lonMin = min(lonMin, rel)
+                lonMax = max(lonMax, rel)
+            }
+        }
+        if (lonMax <= lonMin || latMax <= latMin) return@LaunchedEffect
+        val lonPad = 0.05 * (lonMax - lonMin)
+        val west = cLon0 + lonMin - lonPad
+        val east = cLon0 + lonMax + lonPad
+        val latPad = 0.05 * (latMax - latMin)
+        val south = (latMin - latPad).coerceIn(-TileMath.LAT_LIMIT, TileMath.LAT_LIMIT)
+        val north = (latMax + latPad).coerceIn(-TileMath.LAT_LIMIT, TileMath.LAT_LIMIT)
+        val tw = TileMath.chooseWindow(west, south, east, north, minZoom = SAT_MIN_ZOOM)
+        if (tw == null) return@LaunchedEffect // overview: local texture is just as sharp
+        val ovl = withContext(Dispatchers.IO) {
+            composeTileOverlay(tw) { z, x, y -> satSource.tile(z, x, y) }
+        }
+        satStatus = if (ovl.filledFraction < 0.2) "Satellit offline" else null
+        satOverlay = ovl
+    }
+
     // Shaded sphere: half-resolution android bitmap redrawn when the view changes.
     val shadeBuf = remember(canvasSize) {
         if (canvasSize.width < 2 || canvasSize.height < 2) null
@@ -187,7 +268,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             )
         }
     }
-    remember(globeTex, shadeBuf, centerLat, centerLon, zoom, canvasSize) {
+    remember(globeTex, shadeBuf, centerLat, centerLon, zoom, canvasSize, satOverlay) {
         // Any view change invalidates the windowed detail render: kill it in
         // the SAME frame, no fade-out. The quick render beneath is drawn from
         // the very same center, so it is aligned with the vectors by
@@ -203,7 +284,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
             // hemisphere render across the screen
             val rPx = min(canvasSize.width, canvasSize.height) * 0.44f * zoom
             val qwin = visibleWindow(canvasSize.width, canvasSize.height, rPx)
-            renderShadedSphere(b, m, centerLat, centerLon, qwin[0], qwin[1], qwin[2], qwin[3])
+            renderShadedSphere(b, m, centerLat, centerLon, qwin[0], qwin[1], qwin[2], qwin[3], ovl = satOverlay)
         }
     }
 
@@ -213,7 +294,7 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
     // buffer so the sharpening is not a visible pop. At high zoom the window
     // is a small patch of the globe, so the texture is sampled near source
     // resolution instead of blowing up a whole-hemisphere bitmap.
-    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize, interacting) {
+    LaunchedEffect(globeTex, centerLat, centerLon, zoom, canvasSize, interacting, satOverlay) {
         if (interacting) return@LaunchedEffect
         val m = globeTex
         if (m == null || canvasSize.width < 2 || canvasSize.height < 2) return@LaunchedEffect
@@ -229,10 +310,11 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
         }
         val cl = centerLat
         val co = centerLon
+        val sv = satOverlay
         val g0 = win[0]; val g1 = win[1]; val g2 = win[2]; val g3 = win[3]
         val bmp = withContext(Dispatchers.Default) {
             android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888).also {
-                renderShadedSphere(ShadeBuffer(it, IntArray(bw * bh)), m, cl, co, g0, g1, g2, g3, ss = 2)
+                renderShadedSphere(ShadeBuffer(it, IntArray(bw * bh)), m, cl, co, g0, g1, g2, g3, ss = 2, ovl = sv)
             }
         }
         detailAlpha.snapTo(0f)
@@ -764,6 +846,24 @@ fun HomeScreen(vm: AppViewModel, state: AppUiState) {
                     onClick = { vm.setSource(DataSource.LOCAL_FILE) },
                     label = { Text("Datei") },
                 )
+                FilterChip(
+                    selected = state.satelliteOnline,
+                    onClick = { vm.setSatelliteOnline(!state.satelliteOnline) },
+                    label = { Text("Satellit HD") },
+                )
+            }
+
+            if (state.satelliteOnline) {
+                // Esri requires attribution while their imagery is displayed.
+                Text(
+                    (satStatus?.let { "$it · " } ?: "") + "Luftbild: ${EsriTileSource.ATTRIBUTION}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(
+                        alpha = if (satStatus != null) 0.95f else 0.55f
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
             when (state.source) {
@@ -907,6 +1007,8 @@ private fun renderShadedSphere(
     gx1: Double = 1.0,
     gy1: Double = 1.0,
     ss: Int = 1,
+    /** Optional online satellite patch, sampled where it covers, geo-locked. */
+    ovl: TileOverlay? = null,
 ) {
     val w = buf.bmp.width
     val h = buf.bmp.height
@@ -957,12 +1059,21 @@ private fun renderShadedSphere(
                 val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
                 val latD = phi * 180.0 / PI
                 val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
-                // Fractional mask coords (pixel centres at integers): bilinear lookup
-                // keeps coastlines and relief smooth when the texture is magnified.
-                val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
-                val my = ((90.0 - latD) / 180.0) * maskH - 0.5
-                val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
-                val argb = tex.sampleBilinear(mx, my, lvl)
+                var argb = 0
+                if (ovl != null) {
+                    val oLon = lon0 + shortestLonDelta(lon0, lonD)
+                    if (latD >= ovl.south && latD <= ovl.north && oLon >= ovl.west && oLon <= ovl.east) {
+                        argb = sampleOverlayBilinear(ovl, oLon, latD)
+                    }
+                }
+                if (argb == 0) {
+                    // Fractional mask coords (pixel centres at integers): bilinear lookup
+                    // keeps coastlines and relief smooth when the texture is magnified.
+                    val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
+                    val my = ((90.0 - latD) / 180.0) * maskH - 0.5
+                    val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
+                    argb = tex.sampleBilinear(mx, my, lvl)
+                }
                 // Gentle sphere shading; the texture already carries its own relief.
                 val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
                 val k = 0.72 + 0.28 * diff
@@ -995,10 +1106,19 @@ private fun renderShadedSphere(
                         val lam = l0 + atan2(gx, cosP0 * nz - sinP0 * gy)
                         val latD = phi * 180.0 / PI
                         val lonD = (lam * 180.0 / PI).let { x -> ((x + 540.0) % 360.0) - 180.0 }
-                        val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
-                        val my = ((90.0 - latD) / 180.0) * maskH - 0.5
-                        val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
-                        val argb = tex.sampleBilinear(mx, my, lvl)
+                        var argb = 0
+                        if (ovl != null) {
+                            val oLon = lon0 + shortestLonDelta(lon0, lonD)
+                            if (latD >= ovl.south && latD <= ovl.north && oLon >= ovl.west && oLon <= ovl.east) {
+                                argb = sampleOverlayBilinear(ovl, oLon, latD)
+                            }
+                        }
+                        if (argb == 0) {
+                            val mx = ((lonD + 180.0) / 360.0) * maskW - 0.5
+                            val my = ((90.0 - latD) / 180.0) * maskH - 0.5
+                            val lvl = if (rr > 0.72 && lod < maxLod) lod + 1 else lod
+                            argb = tex.sampleBilinear(mx, my, lvl)
+                        }
                         val diff = (gx * lx + gy * ly + nz * lz).coerceAtLeast(0.0)
                         val k = 0.72 + 0.28 * diff
                         rAcc += ((argb shr 16) and 0xFF) * k
@@ -1040,6 +1160,42 @@ private fun windowDst(win: DoubleArray, cx: Float, cy: Float, r: Float): Pair<In
     val w = ((win[2] - win[0]).toFloat() * r).toInt().coerceAtLeast(1)
     val h = ((win[3] - win[1]).toFloat() * r).toInt().coerceAtLeast(1)
     return Pair(IntOffset(x, y), IntSize(w, h))
+}
+
+/**
+ * Bilinear ARGB sample from the satellite overlay (pixel centres at
+ * integers). Returns 0 (treated as "no data") when any corner of the sample
+ * footprint is a tile gap, so gaps fall back to the baked texture.
+ */
+private fun sampleOverlayBilinear(ovl: TileOverlay, lon: Double, lat: Double): Int {
+    val w = ovl.width
+    val h = ovl.height
+    val ox = ovl.toX(lon)
+    val oy = ovl.toY(lat)
+    if (ox < -0.5 || oy < -0.5 || ox > w - 0.5 || oy > h - 0.5) return 0
+    val x0 = ox.toInt().coerceIn(0, w - 1)
+    val y0 = oy.toInt().coerceIn(0, h - 1)
+    val x1 = if (x0 + 1 <= w - 1) x0 + 1 else x0
+    val y1 = if (y0 + 1 <= h - 1) y0 + 1 else y0
+    val fx = ox - x0
+    val fy = oy - y0
+    val px = ovl.px
+    val i00 = px[y0 * w + x0]
+    val i10 = px[y0 * w + x1]
+    val i01 = px[y1 * w + x0]
+    val i11 = px[y1 * w + x1]
+    if (i00 == 0 || i10 == 0 || i01 == 0 || i11 == 0) return 0
+    val w00 = (1 - fx) * (1 - fy)
+    val w10 = fx * (1 - fy)
+    val w01 = (1 - fx) * fy
+    val w11 = fx * fy
+    val r = ((i00 shr 16 and 0xFF) * w00 + (i10 shr 16 and 0xFF) * w10 +
+        (i01 shr 16 and 0xFF) * w01 + (i11 shr 16 and 0xFF) * w11 + 0.5).toInt().coerceIn(0, 255)
+    val g = ((i00 shr 8 and 0xFF) * w00 + (i10 shr 8 and 0xFF) * w10 +
+        (i01 shr 8 and 0xFF) * w01 + (i11 shr 8 and 0xFF) * w11 + 0.5).toInt().coerceIn(0, 255)
+    val b = ((i00 and 0xFF) * w00 + (i10 and 0xFF) * w10 +
+        (i01 and 0xFF) * w01 + (i11 and 0xFF) * w11 + 0.5).toInt().coerceIn(0, 255)
+    return 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
 }
 
 /** Shortest signed longitude delta from [from] to [to]. */

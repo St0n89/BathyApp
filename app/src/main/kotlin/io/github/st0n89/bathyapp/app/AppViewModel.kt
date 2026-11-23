@@ -56,6 +56,8 @@ data class AppUiState(
     val localInfo: String? = null,
     val localReady: Boolean = false,
     val gebcoInfo: String? = null,
+    /** Optional online high-resolution satellite layer on the globe (ESRI World Imagery). */
+    val satelliteOnline: Boolean = false,
     val pointA: DoubleArray? = null,
     val pointB: DoubleArray? = null,
     val profile: List<ProfilePoint>? = null,
@@ -122,6 +124,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(AppUiState())
     val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    private val prefs = application.getSharedPreferences("bathyapp_prefs", Context.MODE_PRIVATE)
+
+    init {
+        if (prefs.getBoolean(PREF_SATELLITE_ONLINE, false)) {
+            update { it.copy(satelliteOnline = true) }
+        }
+    }
+
+    /** Toggles the optional online satellite layer (persisted across restarts). */
+    fun setSatelliteOnline(on: Boolean) {
+        prefs.edit().putBoolean(PREF_SATELLITE_ONLINE, on).apply()
+        update { it.copy(satelliteOnline = on) }
+    }
 
     private var localHandle: LocalFileHandle? = null
 
@@ -487,5 +503,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         localHandle?.close()
         gebcoHandle?.close()
+    }
+
+    companion object {
+        const val PREF_SATELLITE_ONLINE = "satellite_online"
     }
 }
