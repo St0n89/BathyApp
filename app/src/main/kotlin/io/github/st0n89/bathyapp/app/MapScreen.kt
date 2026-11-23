@@ -18,11 +18,20 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,16 +51,20 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.st0n89.bathyapp.core.geo.Colormap
+import io.github.st0n89.bathyapp.core.seismic.FdtdWaveform
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val MarkerA = Color(0xFFE53935)
 private val MarkerB = Color(0xFFFFC107)
+private val MarkerShot = Color(0xFFE53935)
+private val MarkerRecv = Color(0xFF00E5FF)
 
 @Composable
 fun MapScreen(vm: AppViewModel, state: AppUiState) {
@@ -68,6 +81,30 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
     var scale by remember(grid) { mutableFloatStateOf(1f) }
     var pan by remember(grid) { mutableStateOf(Offset.Zero) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // FDtd placement dialogs
+    var pendingSource by remember { mutableStateOf<DoubleArray?>(null) }
+    var pendingReceiver by remember { mutableStateOf<DoubleArray?>(null) }
+    pendingSource?.let { point ->
+        SourceDialog(
+            initialDepth = (vm.waterDepthAt(point[0], point[1]) / 2.0).coerceAtLeast(20.0),
+            onCancel = { pendingSource = null },
+            onConfirm = { depth, f0, waveform, amp ->
+                vm.placeShot(point[0], point[1], depth, f0, waveform, amp)
+                pendingSource = null
+            },
+        )
+    }
+    pendingReceiver?.let { point ->
+        ReceiverDialog(
+            initialDepth = vm.seafloorDepthAt(point[0], point[1]),
+            onCancel = { pendingReceiver = null },
+            onConfirm = { depth ->
+                vm.addReceiver(point[0], point[1], depth)
+                pendingReceiver = null
+            },
+        )
+    }
 
     val stats = remember(grid) { grid.stats() }
 
@@ -112,6 +149,15 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
     val gridCsvLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
     ) { uri -> uri?.let { vm.exportGridCsv(context, it) } }
+    val sourceJuliaLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri -> uri?.let { vm.exportSourceJulia(context, it) } }
+    val envJuliaLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        uri?.let { vm.exportEnvJulia(context, it) }
+        sourceJuliaLauncher.launch("source.jl")
+    }
 
     Column(modifier = Modifier.fillMaxSize().navigationBarsPadding()) {
         Canvas(
@@ -119,7 +165,7 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 .fillMaxWidth()
                 .weight(1f)
                 .onSizeChanged { canvasSize = it }
-                .pointerInput(grid) {
+                .pointerInput(grid, state.fdtdMode, state.shot, state.receivers.size) {
                     detectTapGestures { tap ->
                         val cs = canvasSize
                         if (cs.width > 0 && cs.height > 0) {
@@ -135,7 +181,11 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                             if (col >= 0f && col <= grid.nx - 1f && row >= 0f && row <= grid.ny - 1f) {
                                 val lon = grid.west + (col + 0.5f) * grid.dx
                                 val lat = grid.north - (row + 0.5f) * grid.dy
-                                vm.setPoint(lon, lat)
+                                when (state.fdtdMode) {
+                                    FdtdPlacementMode.SOURCE -> pendingSource = doubleArrayOf(lon, lat)
+                                    FdtdPlacementMode.RECEIVER -> pendingReceiver = doubleArrayOf(lon, lat)
+                                    FdtdPlacementMode.AB -> vm.setPoint(lon, lat)
+                                }
                             }
                         }
                     }
@@ -181,6 +231,29 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 drawCircle(Color.White, radius = 14f, center = p)
                 drawCircle(MarkerB, radius = 9f, center = p)
             }
+            val shot = state.shot
+            if (shot != null) {
+                val ps = toPixel(shot.lon, shot.lat)
+                for (r in state.receivers) {
+                    drawLine(
+                        color = MarkerRecv.copy(alpha = 0.8f),
+                        start = ps,
+                        end = toPixel(r.lon, r.lat),
+                        strokeWidth = 3f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                    )
+                }
+                drawCircle(Color.White, radius = 16f, center = ps)
+                drawCircle(MarkerShot, radius = 11f, center = ps)
+            }
+            for ((i, r) in state.receivers.withIndex()) {
+                val p = toPixel(r.lon, r.lat)
+                drawCircle(Color.White, radius = 13f, center = p)
+                drawCircle(
+                    if (i == state.selectedReceiver) MarkerShot else MarkerRecv,
+                    radius = 8f, center = p,
+                )
+            }
         }
 
         // Ausschnitt laden, wenn über den Rand des geladenen Gitters hinausgepannt wurde
@@ -220,6 +293,23 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+
+        // -------- FDtd: Modus, Meeresboden, Receiver-Dropdown, Export --------
+        fdtdAcquisitionRow(vm, state, onExport = {
+            if (vm.prepFdtdExport()) envJuliaLauncher.launch("env.jl")
+        })
+
+        state.fdtdPlan?.let { p ->
+            Text(
+                "FDtd-Plan: ${p.nx}×${p.nz} @ ${"%.0f".format(p.dx)} m, Linie ${"%.1f".format(p.lineLenM / 1000.0)} km, " +
+                    "Tiefe ${"%.0f".format(p.bathyMaxM)} m, mud/sand/rock = ${p.classCounts[io.github.st0n89.bathyapp.core.seismic.BottomClass.MUD] ?: 0}/" +
+                    "${p.classCounts[io.github.st0n89.bathyapp.core.seismic.BottomClass.SAND] ?: 0}/${p.classCounts[io.github.st0n89.bathyapp.core.seismic.BottomClass.ROCK] ?: 0}" +
+                    (if (p.coarsened) ", vergröbert" else "") +
+                    ", tmax ≈ ${"%.1f".format(p.tmaxHintS)} s",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+            )
         }
 
         // colorbar: Land (max) links ... Wasser (min) rechts
@@ -267,9 +357,22 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MarkerB,
             )
+            if (state.shot != null) {
+                Text(
+                    "Quelle: ${fmtPos(doubleArrayOf(state.shot.lon, state.shot.lat))}, ${state.shot.depthM.toInt()} m, ${state.shot.f0.toInt()} Hz",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MarkerShot,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Text(
-            "Tippen setzt A, dann B. Pinch zoomt. Über den Rand der geladenen Karte ziehen und \"Ausschnitt laden\" tippen, um neue Gebiete zu holen.",
+            when (state.fdtdMode) {
+                FdtdPlacementMode.AB -> "Tippen setzt A, dann B. Pinch zoomt. Über den Rand ziehen und \"Ausschnitt laden\" tippen für neue Gebiete."
+                FdtdPlacementMode.SOURCE -> "Tippen platziert die seismische Quelle (Tiefe/Wellenform im Dialog)."
+                FdtdPlacementMode.RECEIVER -> "Tippen platziert einen Receiver (Tiefe im Dialog, Standard: Meeresboden)."
+            },
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
         )
@@ -293,13 +396,192 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
         state.error?.let {
             Text(
                 it,
-                color = MaterialTheme.colorScheme.error,
+                color = if (it.startsWith("Hinweis")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
             )
         }
         Spacer(Modifier.height(12.dp))
     }
+}
+
+@Composable
+private fun fdtdAcquisitionRow(vm: AppViewModel, state: AppUiState, onExport: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            FilterChip(
+                selected = state.fdtdMode == FdtdPlacementMode.AB,
+                onClick = { vm.setFdtdMode(FdtdPlacementMode.AB) },
+                label = { Text("A/B") },
+            )
+            FilterChip(
+                selected = state.fdtdMode == FdtdPlacementMode.SOURCE,
+                onClick = { vm.setFdtdMode(FdtdPlacementMode.SOURCE) },
+                label = { Text("Quelle") },
+            )
+            FilterChip(
+                selected = state.fdtdMode == FdtdPlacementMode.RECEIVER,
+                onClick = { vm.setFdtdMode(FdtdPlacementMode.RECEIVER) },
+                label = { Text("Receiver") },
+            )
+            if (state.bottomLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.height(14.dp).width(14.dp),
+                    strokeWidth = 2.dp,
+                )
+                Text(
+                    state.bottomInfo ?: "Meeresboden …",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                )
+            } else {
+                TextButton(onClick = { vm.loadBottomType() }) {
+                    Text(if (state.sediment == null) "Meeresboden" else "✓ Sediment", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            ReceiverDropdown(vm, state)
+            TextButton(
+                onClick = { vm.removeSelectedReceiver() },
+                enabled = state.selectedReceiver in state.receivers.indices,
+            ) { Text("Receiver löschen", style = MaterialTheme.typography.labelMedium) }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Button(
+                onClick = onExport,
+                enabled = state.sediment != null && state.shot != null && state.receivers.isNotEmpty(),
+            ) { Text("FDTD-Export (env.jl + source.jl)") }
+            if (state.shot != null || state.receivers.isNotEmpty()) {
+                TextButton(onClick = { vm.clearAcquisition() }) { Text("Reset") }
+            }
+        }
+        if (!state.bottomLoading) {
+            state.bottomInfo?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 1.dp))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReceiverDropdown(vm: AppViewModel, state: AppUiState) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = state.receivers.getOrNull(state.selectedReceiver)?.let {
+        "R${state.selectedReceiver + 1}: %.3f°, %.3f° · ${it.depthM.toInt()} m".format(it.lon, it.lat)
+    } ?: if (state.receivers.isEmpty()) "Receiver: keine" else "Receiver: ${state.receivers.size}"
+    ExposedDropdownMenuBox(
+        expanded = expanded && state.receivers.isNotEmpty(),
+        onExpandedChange = { expanded = it },
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Receiver wählen") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+            textStyle = MaterialTheme.typography.labelMedium,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded && state.receivers.isNotEmpty(),
+            onDismissRequest = { expanded = false },
+        ) {
+            for ((i, r) in state.receivers.withIndex()) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "R${i + 1}: %.3f°, %.3f° · ${r.depthM.toInt()} m".format(r.lon, r.lat),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    },
+                    onClick = {
+                        vm.selectReceiver(i)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceDialog(
+    initialDepth: Double,
+    onCancel: () -> Unit,
+    onConfirm: (depthM: Double, f0: Double, waveform: FdtdWaveform, amp: Double) -> Unit,
+) {
+    var depth by remember { mutableStateOf("%.0f".format(initialDepth)) }
+    var f0 by remember { mutableStateOf("25") }
+    var amp by remember { mutableStateOf("1000") }
+    var waveform by remember { mutableStateOf(FdtdWaveform.HANN) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Quelle platzieren") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = depth, onValueChange = { depth = it }, label = { Text("Tiefe (m unter Wasseroberfläche)") }, singleLine = true)
+                OutlinedTextField(value = f0, onValueChange = { f0 = it }, label = { Text("f0 (Hz)") }, singleLine = true)
+                OutlinedTextField(value = amp, onValueChange = { amp = it }, label = { Text("Amplitude (Pa/s)") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = waveform == FdtdWaveform.HANN, onClick = { waveform = FdtdWaveform.HANN }, label = { Text("Hann") })
+                    FilterChip(selected = waveform == FdtdWaveform.RICKER, onClick = { waveform = FdtdWaveform.RICKER }, label = { Text("Ricker") })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val d = depth.trim().toDoubleOrNull()
+                val f = f0.trim().toDoubleOrNull()
+                val a = amp.trim().toDoubleOrNull()
+                if (d != null && f != null && f > 0 && a != null && a > 0) onConfirm(d, f, waveform, a)
+            }) { Text("Setzen") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Abbrechen") } },
+    )
+}
+
+@Composable
+private fun ReceiverDialog(
+    initialDepth: Double,
+    onCancel: () -> Unit,
+    onConfirm: (depthM: Double) -> Unit,
+) {
+    var depth by remember { mutableStateOf("%.0f".format(initialDepth)) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Receiver platzieren") },
+        text = {
+            OutlinedTextField(
+                value = depth,
+                onValueChange = { depth = it },
+                label = { Text("Tiefe (m, Standard: Meeresboden)") },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val d = depth.trim().toDoubleOrNull()
+                if (d != null && d > 0) onConfirm(d)
+            }) { Text("Hinzufügen") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Abbrechen") } },
+    )
 }
 
 private fun fmtM(v: Float): String =
