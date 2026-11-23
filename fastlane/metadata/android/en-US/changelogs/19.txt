@@ -1,0 +1,6 @@
+New survey UX for the FDTD export:
+- Draggable markers: no more dialogs. Place source and receivers with one tap, then drag them directly on the map.
+- Tap any marker to open a bottom sheet with sliders for source depth, frequency, waveform (Hann/Ricker) and amplitude, or receiver depth (with seabed shortcut).
+- Live 2-D slice preview of the planned env.jl model (water, mud/sand/rock, basement) before exporting.
+- Clear step-by-step guidance in the new survey dock; errors now appear as snackbars.
+- env.jl + source.jl export unchanged (Fdtd2DElastic suite contract).

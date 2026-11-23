@@ -1,0 +1,6 @@
+Neue Survey-Bedienung für den FDTD-Export:
+- Verschiebbare Marker: Quelle und Receiver mit einem Tipp setzen, dann direkt auf der Karte ziehen.
+- Marker antippen öffnet ein Bottom-Sheet mit Slidern für Quellentiefe, Frequenz, Wellenform (Hann/Ricker) und Amplitude bzw. Receiver-Tiefe (mit Meeresboden-Knopf).
+- Live 2-D-Vorschau des geplanten env.jl-Modells (Wasser, Mud/Sand/Fels, Basement) vor dem Export.
+- Klare Schritt-für-Schritt-Anleitung im neuen Survey-Dock; Fehler erscheinen jetzt als Snackbar.
+- env.jl- und source.jl-Export unverändert (Fdtd2DElastic-Suite-Kontrakt).

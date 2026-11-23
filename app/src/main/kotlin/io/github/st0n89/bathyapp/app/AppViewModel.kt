@@ -21,11 +21,13 @@ import io.github.st0n89.bathyapp.core.seismic.FdtdExportPlan
 import io.github.st0n89.bathyapp.core.seismic.FdtdExportResult
 import io.github.st0n89.bathyapp.core.seismic.FdtdReceiver
 import io.github.st0n89.bathyapp.core.seismic.FdtdShot
+import io.github.st0n89.bathyapp.core.seismic.FdtdSlice
 import io.github.st0n89.bathyapp.core.seismic.FdtdWaveform
 import io.github.st0n89.bathyapp.core.sediment.SedGrid
 import io.github.st0n89.bathyapp.core.tiff.GeoTiffReader
 import io.github.st0n89.bathyapp.core.tiff.GeoTiffWriter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,7 +47,7 @@ sealed interface AppScreen {
     data object Profile : AppScreen
 }
 
-enum class FdtdPlacementMode { AB, SOURCE, RECEIVER }
+enum class FdtdPlacementMode { MAP, AB, SOURCE, RECEIVER }
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Home,
@@ -71,14 +73,15 @@ data class AppUiState(
     val pointB: DoubleArray? = null,
     val profile: List<ProfilePoint>? = null,
     val profileStats: ProfileStats? = null,
-    val fdtdMode: FdtdPlacementMode = FdtdPlacementMode.AB,
+    val fdtdMode: FdtdPlacementMode = FdtdPlacementMode.MAP,
     /** GlobSed v3 sediment thickness, loaded once via "Meeresboden". */
     val sediment: SedGrid? = null,
     val bottomLoading: Boolean = false,
     val bottomInfo: String? = null,
     val shot: FdtdShot? = null,
     val receivers: List<FdtdReceiver> = emptyList(),
-    val selectedReceiver: Int = -1,
+    /** Live 2-D slice preview of the planned FDTD export (debounced). */
+    val fdtdSlice: FdtdSlice? = null,
     val fdtdPlan: FdtdExportPlan? = null,
 )
 
@@ -333,8 +336,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(
                     loading = false, loadingNote = null, grid = grid, gridNote = note,
                     screen = AppScreen.Map, pointA = null, pointB = null,
-                    profile = null, profileStats = null,
+                    profile = null, profileStats = null, fdtdSlice = null,
                 )
+                if (_state.value.shot != null && _state.value.receivers.isNotEmpty() && _state.value.sediment != null) {
+                    scheduleFdtdSliceUpdate(0L)
+                }
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, loadingNote = null, error = e.message ?: e.toString())
             }
@@ -550,42 +556,157 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         bottomInfo = "GlobSed v3 (${sed.nx}×${sed.ny}, 5′): Sediment auf ${n / 1000}k Zellen, max $mx m, ⌀ $mean m",
                     )
                 }
+                scheduleFdtdSliceUpdate(0L)
             } catch (e: Exception) {
                 update { it.copy(bottomLoading = false, loadingNote = null, bottomInfo = null, error = "Meeresboden-Daten fehlgeschlagen: ${e.message}") }
             }
         }
     }
 
-    fun placeShot(lon: Double, lat: Double, depthM: Double, f0: Double, waveform: FdtdWaveform, amp: Double) {
-        update {
-            it.copy(shot = FdtdShot(lon, lat, depthM, f0, waveform, amp), fdtdPlan = null, error = null)
+    /**
+     * Places (or replaces) the source with sensible defaults: mid-water
+     * depth, previous (or default 25 Hz Hann) waveform settings.
+     */
+    fun placeShot(lon: Double, lat: Double) {
+        val floor = seafloorDepthAt(lon, lat)
+        if (floor < 10.0) {
+            update { it.copy(error = "Zu flach für eine Quelle (${floor.toInt()} m Wasser) — in tieferem Wasser platzieren.") }
+            return
         }
-    }
-
-    fun addReceiver(lon: Double, lat: Double, depthM: Double) {
+        val depth = (floor / 2.0).coerceIn(1.0, floor - 1.0)
         update {
             it.copy(
-                receivers = it.receivers + FdtdReceiver(lon, lat, depthM),
+                shot = FdtdShot(
+                    lon, lat, depth,
+                    it.shot?.f0 ?: DEFAULT_F0,
+                    it.shot?.waveform ?: FdtdWaveform.HANN,
+                    it.shot?.amp ?: DEFAULT_AMP,
+                ),
                 fdtdPlan = null, error = null,
             )
         }
+        scheduleFdtdSliceUpdate()
     }
 
-    fun selectReceiver(i: Int) = update { it.copy(selectedReceiver = if (it.selectedReceiver == i) -1 else i) }
+    /** Live-update while dragging: depth is clamped into the water column below. */
+    fun moveShot(lon: Double, lat: Double) {
+        val sh = _state.value.shot ?: return
+        val floor = seafloorDepthAt(lon, lat)
+        val depth = if (floor < 10.0) sh.depthM else sh.depthM.coerceAtMost((floor - 1.0).coerceAtLeast(1.0))
+        update { it.copy(shot = sh.copy(lon = lon, lat = lat, depthM = depth), fdtdPlan = null) }
+        scheduleFdtdSliceUpdate()
+    }
 
-    fun removeSelectedReceiver() {
+    fun updateShot(depthM: Double? = null, f0: Double? = null, waveform: FdtdWaveform? = null, amp: Double? = null) {
+        val sh = _state.value.shot ?: return
+        val floor = seafloorDepthAt(sh.lon, sh.lat)
+        val d = (depthM ?: sh.depthM).coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
         update {
-            if (it.selectedReceiver in it.receivers.indices) {
-                it.copy(receivers = it.receivers.filterIndexed { idx, _ -> idx != it.selectedReceiver }, selectedReceiver = -1, fdtdPlan = null)
-            } else {
-                it
-            }
+            it.copy(
+                shot = sh.copy(
+                    depthM = d,
+                    f0 = (f0 ?: sh.f0).coerceIn(2.0, 250.0),
+                    waveform = waveform ?: sh.waveform,
+                    amp = (amp ?: sh.amp).coerceIn(10.0, 1.0e6),
+                ),
+                fdtdPlan = null,
+            )
         }
+        scheduleFdtdSliceUpdate()
+    }
+
+    fun deleteShot() {
+        update { it.copy(shot = null, fdtdPlan = null) }
+        scheduleFdtdSliceUpdate()
+    }
+
+    /** Adds a receiver on the seafloor (OBS style); depth is adjustable afterwards. */
+    fun addReceiver(lon: Double, lat: Double) {
+        val floor = seafloorDepthAt(lon, lat)
+        if (floor < 10.0) {
+            update { it.copy(error = "Zu flach für einen Receiver (${floor.toInt()} m Wasser) — in tieferem Wasser platzieren.") }
+            return
+        }
+        update {
+            it.copy(receivers = it.receivers + FdtdReceiver(lon, lat, (floor - 1.0).coerceAtLeast(1.0)), fdtdPlan = null, error = null)
+        }
+        scheduleFdtdSliceUpdate()
+    }
+
+    /** Live-update while dragging: depth is clamped into the water column below. */
+    fun moveReceiver(index: Int, lon: Double, lat: Double) {
+        val st = _state.value
+        if (index !in st.receivers.indices) return
+        val r = st.receivers[index]
+        val floor = seafloorDepthAt(lon, lat)
+        val depth = if (floor < 10.0) r.depthM else r.depthM.coerceAtMost((floor - 1.0).coerceAtLeast(1.0))
+        update { s ->
+            s.copy(
+                receivers = s.receivers.mapIndexed { i, x -> if (i == index) FdtdReceiver(lon, lat, depth) else x },
+                fdtdPlan = null,
+            )
+        }
+        scheduleFdtdSliceUpdate()
+    }
+
+    fun updateReceiverDepth(index: Int, depthM: Double) {
+        val st = _state.value
+        if (index !in st.receivers.indices) return
+        val r = st.receivers[index]
+        val floor = seafloorDepthAt(r.lon, r.lat)
+        val d = depthM.coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
+        update { s ->
+            s.copy(receivers = s.receivers.mapIndexed { i, x -> if (i == index) FdtdReceiver(r.lon, r.lat, d) else x }, fdtdPlan = null)
+        }
+        scheduleFdtdSliceUpdate()
+    }
+
+    fun removeReceiver(index: Int) {
+        update { s ->
+            if (index in s.receivers.indices) s.copy(receivers = s.receivers.filterIndexed { i, _ -> i != index }, fdtdPlan = null) else s
+        }
+        scheduleFdtdSliceUpdate()
     }
 
     fun seafloorDepthAt(lon: Double, lat: Double): Double = waterDepthAt(lon, lat).coerceAtLeast(1.0)
 
-    fun clearAcquisition() = update { it.copy(shot = null, receivers = emptyList(), selectedReceiver = -1, fdtdPlan = null) }
+    fun clearAcquisition() {
+        update { it.copy(shot = null, receivers = emptyList(), fdtdPlan = null, fdtdSlice = null) }
+        sliceJob?.cancel()
+    }
+
+    // ---------------- live slice preview ----------------
+
+    private var sliceJob: Job? = null
+
+    /**
+     * Debounced recompute of the 2-D slice preview after any survey change
+     * (placement, drag, depth slider, GlobSed load). Cheap: samples the
+     * corridor at export resolution and never writes env/source text.
+     */
+    private fun scheduleFdtdSliceUpdate(delayMs: Long = 250L) {
+        sliceJob?.cancel()
+        val s = _state.value
+        if (s.sediment == null || s.shot == null || s.receivers.isEmpty()) {
+            if (s.fdtdSlice != null) update { it.copy(fdtdSlice = null) }
+            return
+        }
+        sliceJob = viewModelScope.launch(Dispatchers.Default) {
+            kotlinx.coroutines.delay(delayMs)
+            val st = _state.value
+            val g = st.grid ?: return@launch
+            val sed = st.sediment ?: return@launch
+            val sh = st.shot ?: return@launch
+            if (st.receivers.isEmpty()) return@launch
+            try {
+                val sl = FdtdExport.slice(g, sed, sh, st.receivers, st.gridNote ?: "BathyApp")
+                _state.value = _state.value.copy(fdtdSlice = sl)
+            } catch (_: IllegalArgumentException) {
+                // preview only: keep the last valid slice; export reports the cause
+            } catch (_: IllegalStateException) {
+            }
+        }
+    }
 
     /** Builds env.jl + source.jl in memory; false (with error set) if not placeable. */
     fun prepFdtdExport(): Boolean {
@@ -643,5 +764,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val PREF_SATELLITE_ONLINE = "satellite_online"
+        const val DEFAULT_F0 = 25.0
+        const val DEFAULT_AMP = 1.0e3
     }
 }

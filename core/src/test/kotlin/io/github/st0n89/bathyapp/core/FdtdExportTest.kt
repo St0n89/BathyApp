@@ -226,4 +226,44 @@ class FdtdExportTest {
         assertEquals(2, g.ny)
         assertEquals(4, g.nx)
     }
+
+    // ---- slice preview (v0.11.0) --------------------------------------------
+
+    @Test
+    fun sliceMatchesBuildPlanAndPerColumnArrays() {
+        val grid = waterGrid()
+        val sed = sedGrid()
+        val recs = listOf(receiver, FdtdReceiver(lon = -0.03, lat = 0.0, depthM = 950.0))
+        val s = FdtdExport.slice(grid, sed, shot, recs, "GEBCO test")
+        val r = FdtdExport.build(grid, sed, shot, recs, "GEBCO test")
+
+        assertEquals(r.plan.dx, s.dx, 1e-12)
+        assertEquals(r.plan.zmax, s.zmaxM, 1e-12)
+        assertEquals(r.plan.nx, s.classes.size)
+        assertEquals(r.plan.nx, s.bathy.size)
+        assertEquals(r.plan.nx, s.sedBase.size)
+        assertEquals(r.plan.classCounts, s.plan.classCounts)
+        assertEquals(2, s.recXm.size)
+        assertEquals(950.0, s.recDepthM[1], 1e-12)
+        assertEquals(shot.depthM, s.shotDepthM, 1e-12)
+
+        // shot sits in the water column; 1000 m water + 300 m sediment
+        val col = (s.shotXm / s.dx).toInt().coerceIn(0, s.classes.size - 1)
+        assertEquals(BottomClass.MUD, s.classes[col])
+        assertEquals(1000.0, s.bathy[col], 1e-9)
+        assertEquals(1300.0, s.sedBase[col], 1e-9)
+        // receiver offsets are inside the modelled domain
+        for (rx in s.recXm) assertTrue(rx in 0.0..(r.plan.nx - 1) * r.plan.dx)
+    }
+
+    @Test
+    fun sliceThrowsLikeBuildOnLandPlacement() {
+        val grid = waterGrid(landRow = 0) // top row is land, lat ~ +0.3
+        try {
+            FdtdExport.slice(grid, sedGrid(), FdtdShot(lon = 0.0, lat = 0.2925, depthM = 5.0, f0 = 25.0, waveform = FdtdWaveform.HANN), listOf(FdtdReceiver(0.0, 0.2, 500.0)), "t")
+            throw AssertionError("slice must reject a source on land")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("land"))
+        }
+    }
 }

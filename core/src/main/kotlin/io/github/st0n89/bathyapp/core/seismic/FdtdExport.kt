@@ -53,6 +53,24 @@ data class FdtdExportPlan(
 data class FdtdExportResult(val envText: String, val sourceText: String, val plan: FdtdExportPlan)
 
 /**
+ * The sampled 2-D slice an export would produce, for live preview UI.
+ * Column j is at x = j * dx m; bathy/sedBase are depths in m below the
+ * free surface, classes is the per-column bottom classification.
+ */
+data class FdtdSlice(
+    val bathy: DoubleArray,
+    val sedBase: DoubleArray,
+    val classes: List<BottomClass>,
+    val dx: Double,
+    val zmaxM: Double,
+    val shotXm: Double,
+    val shotDepthM: Double,
+    val recXm: DoubleArray,
+    val recDepthM: DoubleArray,
+    val plan: FdtdExportPlan,
+)
+
+/**
  * Exports a shot + receiver survey as env.jl / source.jl for the
  * Fdtd2DElastic Julia suite (github.com/St0n89/Fdtd2DElastic).
  *
@@ -79,6 +97,47 @@ object FdtdExport {
     private const val EARTH_R_M = Profiler.EARTH_RADIUS_KM * 1000.0
 
     fun build(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>, sourceNote: String): FdtdExportResult {
+        val st = compute(grid, sed, shot, receivers)
+        return FdtdExportResult(writeEnv(st, sourceNote), writeSource(st), st.plan)
+    }
+
+    /**
+     * The sampled slice + sizing an export WOULD produce, without writing
+     * any files. Throws the same [IllegalArgumentException]s as [build]
+     * (land placement, depth out of the water column, ...).
+     */
+    fun slice(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>, sourceNote: String): FdtdSlice {
+        val st = compute(grid, sed, shot, receivers)
+        return FdtdSlice(
+            bathy = st.sl.bathy,
+            sedBase = st.sl.sedBase,
+            classes = st.sl.classId,
+            dx = st.d.dx,
+            zmaxM = st.d.zmax,
+            shotXm = st.sourceX,
+            shotDepthM = shot.depthM,
+            recXm = st.recX,
+            recDepthM = DoubleArray(receivers.size) { receivers[it].depthM },
+            plan = st.plan,
+        )
+    }
+
+    /** Everything the env.jl/source.jl writers need, fully sized. */
+    private class Stage(
+        val shot: FdtdShot,
+        val receivers: List<FdtdReceiver>,
+        val sl: SliceArrays,
+        val d: Dims,
+        val sourceX: Double,
+        val ix: Int,
+        val iz: Int,
+        val recX: DoubleArray,
+        val counts: Map<BottomClass, Int>,
+        val warnings: List<String>,
+        val plan: FdtdExportPlan,
+    )
+
+    private fun compute(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>): Stage {
         require(receivers.isNotEmpty()) { "no receivers placed" }
         val warnings = mutableListOf<String>()
 
@@ -180,9 +239,6 @@ object FdtdExport {
             warnings.add("slice crosses land at ${sl.landNodes} of ${d.nx} columns — land columns are modelled as basement up to z = 0 (free surface)")
         }
 
-        val envText = writeEnv(shot, receivers, sl, d, sourceNote, warnings, counts)
-        val sourceText = writeSource(shot, receivers, sl, d, sourceX, ix, iz, recX, warnings)
-
         val plan = FdtdExportPlan(
             dx = d.dx, dz = d.dz, nx = d.nx, nz = d.nz,
             xmax = d.xmax, zmax = d.zmax,
@@ -191,7 +247,7 @@ object FdtdExport {
             coarsened = coarsened, landNodes = sl.landNodes,
             tmaxHintS = tmaxHint, warnings = warnings,
         )
-        return FdtdExportResult(envText, sourceText, plan)
+        return Stage(shot, receivers, sl, d, sourceX, ix, iz, recX, counts, warnings, plan)
     }
 
     private class Dims(val nx: Int, val nz: Int, val dx: Double, val dz: Double, val xmax: Double, val zmax: Double)
@@ -303,9 +359,15 @@ object FdtdExport {
     // ---------------------------------------------------------------- env.jl
 
     private fun writeEnv(
-        shot: FdtdShot, receivers: List<FdtdReceiver>, sl: SliceArrays, d: Dims,
-        sourceNote: String, warnings: List<String>, counts: Map<BottomClass, Int>,
+        st: Stage,
+        sourceNote: String,
     ): String {
+        val shot = st.shot
+        val receivers = st.receivers
+        val sl = st.sl
+        val d = st.d
+        val warnings = st.warnings
+        val counts = st.counts
         val recvList = receivers.withIndex().joinToString(", ") { (i, r) ->
             "R${i + 1} (${f(r.lon)}, ${f(r.lat)}) @ ${f(r.depthM)} m"
         }
@@ -391,10 +453,16 @@ object FdtdExport {
 
     // ------------------------------------------------------------- source.jl
 
-    private fun writeSource(
-        shot: FdtdShot, receivers: List<FdtdReceiver>, sl: SliceArrays, d: Dims,
-        sourceX: Double, ix: Int, iz: Int, recX: DoubleArray, warnings: List<String>,
-    ): String {
+    private fun writeSource(st: Stage): String {
+        val shot = st.shot
+        val receivers = st.receivers
+        val sl = st.sl
+        val d = st.d
+        val warnings = st.warnings
+        val sourceX = st.sourceX
+        val ix = st.ix
+        val iz = st.iz
+        val recX = st.recX
         val kind = if (shot.waveform == FdtdWaveform.HANN) "Hann pulse" else "Ricker (derivative)"
         val header = headerComment(
             "source.jl — Fdtd2DElastic acquisition exported by BathyApp",
