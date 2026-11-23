@@ -16,6 +16,13 @@ import io.github.st0n89.bathyapp.core.nc3.NetCdf3File
 import io.github.st0n89.bathyapp.core.profile.Profiler
 import io.github.st0n89.bathyapp.core.profile.ProfilePoint
 import io.github.st0n89.bathyapp.core.profile.ProfileStats
+import io.github.st0n89.bathyapp.core.seismic.FdtdExport
+import io.github.st0n89.bathyapp.core.seismic.FdtdExportPlan
+import io.github.st0n89.bathyapp.core.seismic.FdtdExportResult
+import io.github.st0n89.bathyapp.core.seismic.FdtdReceiver
+import io.github.st0n89.bathyapp.core.seismic.FdtdShot
+import io.github.st0n89.bathyapp.core.seismic.FdtdWaveform
+import io.github.st0n89.bathyapp.core.sediment.SedGrid
 import io.github.st0n89.bathyapp.core.tiff.GeoTiffReader
 import io.github.st0n89.bathyapp.core.tiff.GeoTiffWriter
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +44,8 @@ sealed interface AppScreen {
     data object Map : AppScreen
     data object Profile : AppScreen
 }
+
+enum class FdtdPlacementMode { AB, SOURCE, RECEIVER }
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Home,
@@ -62,6 +71,15 @@ data class AppUiState(
     val pointB: DoubleArray? = null,
     val profile: List<ProfilePoint>? = null,
     val profileStats: ProfileStats? = null,
+    val fdtdMode: FdtdPlacementMode = FdtdPlacementMode.AB,
+    /** GlobSed v3 sediment thickness, loaded once via "Meeresboden". */
+    val sediment: SedGrid? = null,
+    val bottomLoading: Boolean = false,
+    val bottomInfo: String? = null,
+    val shot: FdtdShot? = null,
+    val receivers: List<FdtdReceiver> = emptyList(),
+    val selectedReceiver: Int = -1,
+    val fdtdPlan: FdtdExportPlan? = null,
 )
 
 /** Handle to a local GEBCO-style NetCDF or GeoTIFF bathymetry file. */
@@ -499,6 +517,124 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearError() = update { it.copy(error = null) }
+
+    // ---------------- FDTD acquisition (Quelle / Receiver / Meeresboden) ----------------
+
+    private var fdtdResult: FdtdExportResult? = null
+
+    fun setFdtdMode(m: FdtdPlacementMode) = update { it.copy(fdtdMode = m, error = null) }
+
+    /** Water depth [m] at (lon, lat); 0 outside the grid or on land. */
+    fun waterDepthAt(lon: Double, lat: Double): Double {
+        val g = _state.value.grid ?: return 0.0
+        val e = g.sample(lon, lat).toDouble()
+        return if (e < 0 && !e.isNaN()) -e else 0.0
+    }
+
+    /** One-time GlobSed v3 download (cached), then bottom classes become available. */
+    fun loadBottomType() {
+        if (_state.value.sediment != null || _state.value.bottomLoading) return
+        val cache = GlobSed.cacheFile(getApplication<Application>().filesDir)
+        update { it.copy(bottomLoading = true, error = null, loadingNote = "Prüfe Meeresboden-Cache …") }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var sed = GlobSed.readCache(cache)
+                if (sed == null) {
+                    sed = GlobSed.downloadAndParse { note -> update { st -> st.copy(loadingNote = note) } }
+                    GlobSed.writeCache(cache, sed)
+                }
+                val (n, mx, mean) = sed.stats()
+                update {
+                    it.copy(
+                        bottomLoading = false, loadingNote = null, sediment = sed,
+                        bottomInfo = "GlobSed v3 (${sed.nx}×${sed.ny}, 5′): Sediment auf ${n / 1000}k Zellen, max $mx m, ⌀ $mean m",
+                    )
+                }
+            } catch (e: Exception) {
+                update { it.copy(bottomLoading = false, loadingNote = null, bottomInfo = null, error = "Meeresboden-Daten fehlgeschlagen: ${e.message}") }
+            }
+        }
+    }
+
+    fun placeShot(lon: Double, lat: Double, depthM: Double, f0: Double, waveform: FdtdWaveform, amp: Double) {
+        update {
+            it.copy(shot = FdtdShot(lon, lat, depthM, f0, waveform, amp), fdtdPlan = null, error = null)
+        }
+    }
+
+    fun addReceiver(lon: Double, lat: Double, depthM: Double) {
+        update {
+            it.copy(
+                receivers = it.receivers + FdtdReceiver(lon, lat, depthM),
+                fdtdPlan = null, error = null,
+            )
+        }
+    }
+
+    fun selectReceiver(i: Int) = update { it.copy(selectedReceiver = if (it.selectedReceiver == i) -1 else i) }
+
+    fun removeSelectedReceiver() {
+        update {
+            if (it.selectedReceiver in it.receivers.indices) {
+                it.copy(receivers = it.receivers.filterIndexed { idx, _ -> idx != it.selectedReceiver }, selectedReceiver = -1, fdtdPlan = null)
+            } else {
+                it
+            }
+        }
+    }
+
+    fun seafloorDepthAt(lon: Double, lat: Double): Double = waterDepthAt(lon, lat).coerceAtLeast(1.0)
+
+    fun clearAcquisition() = update { it.copy(shot = null, receivers = emptyList(), selectedReceiver = -1, fdtdPlan = null) }
+
+    /** Builds env.jl + source.jl in memory; false (with error set) if not placeable. */
+    fun prepFdtdExport(): Boolean {
+        val st = _state.value
+        val grid = st.grid ?: return false
+        val sed = st.sediment
+        val shot = st.shot
+        if (sed == null || shot == null || st.receivers.isEmpty()) return false
+        return try {
+            val note = st.gridNote ?: "BathyApp"
+            val r = FdtdExport.build(grid, sed, shot, st.receivers, note)
+            fdtdResult = r
+            update { it.copy(fdtdPlan = r.plan, error = r.plan.warnings.lastOrNull()?.let { w -> "Hinweis: $w" }) }
+            true
+        } catch (e: Exception) {
+            update { it.copy(error = e.message ?: e.toString()) }
+            false
+        }
+    }
+
+    fun exportEnvJulia(context: Context, uri: Uri) {
+        val r = fdtdResult ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(r.envText.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalStateException("Ziel konnte nicht geöffnet werden")
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(error = "env.jl-Export fehlgeschlagen: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun exportSourceJulia(context: Context, uri: Uri) {
+        val r = fdtdResult ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(r.sourceText.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalStateException("Ziel konnte nicht geöffnet werden")
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(error = "source.jl-Export fehlgeschlagen: ${e.message}")
+                }
+            }
+        }
+    }
 
     override fun onCleared() {
         localHandle?.close()
