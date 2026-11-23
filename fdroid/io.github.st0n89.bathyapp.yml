@@ -26,24 +26,30 @@ Description: |-
     bathymetry ocean shading for area selection, an optional online HD
     satellite layer (Esri World Imagery tiles, off by default, cached
     on-device), an interactive depth raster map, great-circle depth profiles
-    with statistics, and GeoTIFF/CSV export. NetCDF, GeoTIFF, WCS and GEBCO
-    crop clients are hand-written Kotlin, no binary blobs, no tracking.
+    with statistics, GeoTIFF/CSV export, and a seismic survey mode: place a
+    source and receivers on the map, load seafloor sediment classes from
+    GlobSed v3 (NOAA NCEI, 5 arc-minute sediment thickness, one-time
+    download, then cached offline), and export env.jl/source.jl model files
+    with Hamilton-style geoacoustic properties for the FDTD2DElastic Julia
+    suite. NetCDF, GeoTIFF, WCS and GEBCO crop clients are hand-written
+    Kotlin, no binary blobs, no tracking.
 
     Data: GEBCO (https://www.gebco.net) and EMODnet
     (https://emodnet-bathymetry.eu/en/bathymetry), used under their open
-    licenses. Optional satellite imagery: Esri World Imagery
+    licenses. Seafloor sediment thickness: GlobSed v3 (Olson et al., NOAA
+    NCEI). Optional satellite imagery: Esri World Imagery
     (https://www.esri.com), attribution Esri, Maxar, Earthstar Geographics,
     and the GIS User Community.
 RepoType: git
 Repo: https://github.com/St0n89/BathyApp.git
 Builds:
-  - versionName: 0.9.0
-    versionCode: 17
-    commit: 06e70a6976eacbbf00bc2168c57cd742677204ab
+  - versionName: 0.10.0
+    versionCode: 18
+    commit: 3bace9cd312eb8c682ff583ec15cb47ddf9eb07d
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release.apk
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: 0.9.0
-CurrentVersionCode: 17
+CurrentVersion: 0.10.0
+CurrentVersionCode: 18
