@@ -1,1 +1,55 @@
-[{"type":"text","text":"successfully downloaded text file (SHA: 871c004a4d39f73f2599cbe0048b3632152d9364)"},{"type":"resource","resource":{"uri":"repo://St0n89/BathyApp/sha/4712d6345d794396851710a15a00c568c2e897b1/contents/fdroid/io.github.st0n89.bathyapp.yml","mimeType":"text/plain; charset=utf-8","text":"# F-Droid build recipe for BathyApp.\n# Submit this file as metadata/io.github.st0n89.bathyapp.yml in fdroiddata\n# (GitLab merge request), see https://f-droid.org/docs/Inclusion_How_To/\n# Store-listing texts live in fastlane/metadata/android/ (en-US and de-DE).\nCategories:\n  - Navigation\n  - Science\nLicense: MIT\nAuthorName: Dennis Kunde\nSourceCode: https://github.com/St0n89/BathyApp\nIssueTracker: https://github.com/St0n89/BathyApp/issues\nChangelog: https://github.com/St0n89/BathyApp/releases\nAutoName: BathyApp\nSummary: Bathymetry profiles and grids from GEBCO and EMODnet data\nDescription: |-\n    Generate bathymetric profiles and depth grids for any spot in the ocean,\n    directly on your phone.\n\n    Data sources:\n\n    * GEBCO 2026 (worldwide, 15 arc-second), with a local crop cache\n    * EMODnet Bathymetry WCS (European waters, 3.75 arc-second)\n    * local NetCDF (CDF-1/CDF-2) or float GeoTIFF files, fully offline\n\n    Features a rotating 3D globe with NASA Blue Marble satellite imagery and\n    bathymetry ocean shading for area selection, an optional online HD\n    satellite layer (Esri World Imagery tiles, off by default, cached\n    on-device), an interactive depth raster map, great-circle depth profiles\n    with statistics, GeoTIFF/CSV export, and a seismic survey mode: place a\n    source and receivers on the map, load seafloor sediment classes from\n    GlobSed v3 (NOAA NCEI, 5 arc-minute sediment thickness, one-time\n    download, then cached offline), and export env.jl/source.jl model files\n    with Hamilton-style geoacoustic properties for the FDTD2DElastic Julia\n    suite. NetCDF, GeoTIFF, WCS and GEBCO crop clients are hand-written\n    Kotlin, no binary blobs, no tracking.\n\n    Data: GEBCO (https://www.gebco.net) and EMODnet\n    (https://emodnet-bathymetry.eu/en/bathymetry), used under their open\n    licenses. Seafloor sediment thickness: GlobSed v3 (Olson et al., NOAA\n    NCEI). Optional satellite imagery: Esri World Imagery\n    (https://www.esri.com), attribution Esri, Maxar, Earthstar Geographics,\n    and the GIS User Community.\nRepoType: git\nRepo: https://github.com/St0n89/BathyApp.git\nBuilds:\n  - versionName: 0.10.0\n    versionCode: 18\n    commit: 4712d6345d794396851710a15a00c568c2e897b1\n    gradle:\n      - yes\n    output: app/build/outputs/apk/release/app-release.apk\nAutoUpdateMode: Version v%v\nUpdateCheckMode: Tags\nCurrentVersion: 0.11.0\nCurrentVersionCode: 19\n"}}]
+# F-Droid build recipe for BathyApp.
+# Submit this file as metadata/io.github.st0n89.bathyapp.yml in fdroiddata
+# (GitLab merge request), see https://f-droid.org/docs/Inclusion_How_To/
+# Store-listing texts live in fastlane/metadata/android/ (en-US and de-DE).
+Categories:
+  - Navigation
+  - Science
+License: MIT
+AuthorName: Dennis Kunde
+SourceCode: https://github.com/St0n89/BathyApp
+IssueTracker: https://github.com/St0n89/BathyApp/issues
+Changelog: https://github.com/St0n89/BathyApp/releases
+AutoName: BathyApp
+Summary: Bathymetry profiles and grids from GEBCO and EMODnet data
+Description: |-
+    Generate bathymetric profiles and depth grids for any spot in the ocean,
+    directly on your phone.
+
+    Data sources:
+
+    * GEBCO 2026 (worldwide, 15 arc-second), with a local crop cache
+    * EMODnet Bathymetry WCS (European waters, 3.75 arc-second)
+    * local NetCDF (CDF-1/CDF-2) or float GeoTIFF files, fully offline
+
+    Features a rotating 3D globe with NASA Blue Marble satellite imagery and
+    bathymetry ocean shading for area selection, an optional online HD
+    satellite layer (Esri World Imagery tiles, off by default, cached
+    on-device), an interactive depth raster map, great-circle depth profiles
+    with statistics, GeoTIFF/CSV export, and a seismic survey mode: place a
+    source and receivers on the map, load seafloor sediment classes from
+    GlobSed v3 (NOAA NCEI, 5 arc-minute sediment thickness, one-time
+    download, then cached offline), and export env.jl/source.jl model files
+    with Hamilton-style geoacoustic properties for the FDTD2DElastic Julia
+    suite. NetCDF, GeoTIFF, WCS and GEBCO crop clients are hand-written
+    Kotlin, no binary blobs, no tracking.
+
+    Data: GEBCO (https://www.gebco.net) and EMODnet
+    (https://emodnet-bathymetry.eu/en/bathymetry), used under their open
+    licenses. Seafloor sediment thickness: GlobSed v3 (Olson et al., NOAA
+    NCEI). Optional satellite imagery: Esri World Imagery
+    (https://www.esri.com), attribution Esri, Maxar, Earthstar Geographics,
+    and the GIS User Community.
+RepoType: git
+Repo: https://github.com/St0n89/BathyApp.git
+Builds:
+  - versionName: 0.11.0
+    versionCode: 19
+    commit: 4712d6345d794396851710a15a00c568c2e897b1
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/app-release.apk
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags
+CurrentVersion: 0.11.0
+CurrentVersionCode: 19
