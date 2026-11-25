@@ -32,6 +32,13 @@ data class FdtdShot(
 /** Receiver placed on the map. Depth is metres below the water surface. */
 data class FdtdReceiver(val lon: Double, val lat: Double, val depthM: Double)
 
+/**
+ * Explicit survey line A -> B: when set, the 2.5-D slice is sampled along
+ * the A->B great circle and the source/receivers are projected onto it.
+ * Without a line the model follows the shot -> farthest receiver ray.
+ */
+data class FdtdLine(val lon0: Double, val lat0: Double, val lon1: Double, val lat1: Double)
+
 data class FdtdExportPlan(
     val dx: Double,
     val dz: Double,
@@ -53,9 +60,10 @@ data class FdtdExportPlan(
 data class FdtdExportResult(val envText: String, val sourceText: String, val plan: FdtdExportPlan)
 
 /**
- * The sampled 2-D slice an export would produce, for live preview UI.
- * Column j is at x = j * dx m; bathy/sedBase are depths in m below the
- * free surface, classes is the per-column bottom classification.
+ * The sampled 2-D slice an export would produce, for live preview and the
+ * interactive section editor. Column j is at x = j * dx m; bathy/sedBase are
+ * depths in m below the free surface, classes is the per-column bottom
+ * classification, colLon/colLat map every column centre back to the map.
  */
 data class FdtdSlice(
     val bathy: DoubleArray,
@@ -67,6 +75,11 @@ data class FdtdSlice(
     val shotDepthM: Double,
     val recXm: DoubleArray,
     val recDepthM: DoubleArray,
+    /** lon/lat of every column centre (map round-trip for editor gestures). */
+    val colLon: DoubleArray,
+    val colLat: DoubleArray,
+    /** True when the section follows an explicit A-B survey line. */
+    val hasLine: Boolean,
     val plan: FdtdExportPlan,
 )
 
@@ -94,51 +107,79 @@ object FdtdExport {
     private const val PPW = 10.0
     private const val MAX_CELLS = 3_000_000L
     private const val MAX_NX = 8000
+    /** Sizing f0 for preview slices when no source is placed yet (Hz). */
+    const val PREVIEW_F0 = 25.0
     private const val EARTH_R_M = Profiler.EARTH_RADIUS_KM * 1000.0
 
-    fun build(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>, sourceNote: String): FdtdExportResult {
-        val st = compute(grid, sed, shot, receivers)
+    fun build(
+        grid: GeoGrid,
+        sed: SedGrid,
+        shot: FdtdShot,
+        receivers: List<FdtdReceiver>,
+        sourceNote: String,
+        line: FdtdLine? = null,
+    ): FdtdExportResult {
+        require(receivers.isNotEmpty()) { "no receivers placed" }
+        val st = compute(grid, sed, shot, receivers, line)
         return FdtdExportResult(writeEnv(st, sourceNote), writeSource(st), st.plan)
     }
 
     /**
      * The sampled slice + sizing an export WOULD produce, without writing
-     * any files. Throws the same [IllegalArgumentException]s as [build]
-     * (land placement, depth out of the water column, ...).
+     * any files. With an explicit [line] a planning preview also works
+     * before anything is placed (shot == null, receivers empty); without a
+     * line shot and receivers must exist. Throws the same
+     * [IllegalArgumentException]s as [build] for placed items (land
+     * placement, depth out of the water column, ...).
      */
-    fun slice(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>, sourceNote: String): FdtdSlice {
-        val st = compute(grid, sed, shot, receivers)
+    fun slice(
+        grid: GeoGrid,
+        sed: SedGrid,
+        shot: FdtdShot?,
+        receivers: List<FdtdReceiver>,
+        sourceNote: String,
+        line: FdtdLine? = null,
+    ): FdtdSlice {
+        val st = compute(grid, sed, shot, receivers, line)
         return FdtdSlice(
             bathy = st.sl.bathy,
             sedBase = st.sl.sedBase,
             classes = st.sl.classId,
             dx = st.d.dx,
             zmaxM = st.d.zmax,
-            shotXm = st.sourceX,
-            shotDepthM = shot.depthM,
+            shotXm = st.sourceX ?: -1.0,
+            shotDepthM = shot?.depthM ?: 0.0,
             recXm = st.recX,
             recDepthM = DoubleArray(receivers.size) { receivers[it].depthM },
+            colLon = st.sl.colLon,
+            colLat = st.sl.colLat,
+            hasLine = line != null,
             plan = st.plan,
         )
     }
 
     /** Everything the env.jl/source.jl writers need, fully sized. */
     private class Stage(
-        val shot: FdtdShot,
+        val shot: FdtdShot?,
         val receivers: List<FdtdReceiver>,
         val sl: SliceArrays,
         val d: Dims,
-        val sourceX: Double,
-        val ix: Int,
-        val iz: Int,
+        val sourceX: Double?,
+        val ix: Int?,
+        val iz: Int?,
         val recX: DoubleArray,
         val counts: Map<BottomClass, Int>,
         val warnings: List<String>,
         val plan: FdtdExportPlan,
+        val line: FdtdLine?,
     )
 
-    private fun compute(grid: GeoGrid, sed: SedGrid, shot: FdtdShot, receivers: List<FdtdReceiver>): Stage {
-        require(receivers.isNotEmpty()) { "no receivers placed" }
+    private fun compute(grid: GeoGrid, sed: SedGrid, shot: FdtdShot?, receivers: List<FdtdReceiver>, line: FdtdLine?): Stage {
+        val hasLine = line != null
+        if (!hasLine) {
+            require(receivers.isNotEmpty()) { "no receivers placed" }
+            require(shot != null) { "no source placed" }
+        }
         val warnings = mutableListOf<String>()
 
         // ---- land guards ------------------------------------------------
@@ -147,9 +188,11 @@ object FdtdExport {
             require(!e.isNaN() && e < 0) { "$what is on land or outside the loaded grid (elevation ${if (e.isNaN()) "NaN" else e} m)" }
             return -e.toDouble()
         }
-        val shotDepthMax = assertWater(shot.lon, shot.lat, "source")
-        require(shot.depthM in 1.0..(shotDepthMax - 1.0).coerceAtLeast(2.0)) {
-            "source depth ${shot.depthM} m outside the water column (0..${shotDepthMax} m)"
+        if (shot != null) {
+            val shotDepthMax = assertWater(shot.lon, shot.lat, "source")
+            require(shot.depthM in 1.0..(shotDepthMax - 1.0).coerceAtLeast(2.0)) {
+                "source depth ${shot.depthM} m outside the water column (0..${shotDepthMax} m)"
+            }
         }
         for ((i, r) in receivers.withIndex()) {
             val d = assertWater(r.lon, r.lat, "receiver ${i + 1}")
@@ -158,47 +201,108 @@ object FdtdExport {
             }
         }
 
-        // ---- local projection about the shot -----------------------------
-        fun localMetres(lon: Double, lat: Double): Pair<Double, Double> {
-            val mLat = EARTH_R_M * (lat - shot.lat) * PI / 180.0
-            val mLon = EARTH_R_M * (lon - shot.lon) * PI / 180.0 * cos((shot.lat + lat) / 2.0 * PI / 180.0)
-            return mLon to mLat
+        // ---- slice frame: shot -> far receiver, or A -> B ----------------
+        // Local equirectangular metres about the frame origin; az is the
+        // in-frame azimuth, brg/ang the true great-circle bearing/length.
+        val oLon: Double
+        val oLat: Double
+        val az: Double
+        val brg: Double
+        val ang: Double
+        val farRange: Double
+        if (line == null) {
+            val sh = shot!!
+            oLon = sh.lon
+            oLat = sh.lat
+            val loc = receivers.map { localMetres(it.lon, it.lat, oLon, oLat) }
+            val farIdx = loc.indices.maxByOrNull { hypot(loc[it].first, loc[it].second) } ?: 0
+            val far = loc[farIdx]
+            farRange = sqrt(far.first * far.first + far.second * far.second)
+            az = atan2(far.second, far.first)
+            val (b, a2) = bearing(sh.lon, sh.lat, receivers[farIdx].lon, receivers[farIdx].lat)
+            brg = b
+            ang = a2
+        } else {
+            oLon = line.lon0
+            oLat = line.lat0
+            val tb = localMetres(line.lon1, line.lat1, oLon, oLat)
+            farRange = sqrt(tb.first * tb.first + tb.second * tb.second)
+            require(farRange >= 100.0) { "line too short (${"%.0f".format(farRange)} m)" }
+            az = atan2(tb.second, tb.first)
+            val (b, a2) = bearing(line.lon0, line.lat0, line.lon1, line.lat1)
+            brg = b
+            ang = a2
         }
-        val loc = receivers.map { localMetres(it.lon, it.lat) }
-        val farIdx = loc.indices.maxByOrNull { hypot(loc[it].first, loc[it].second) } ?: 0
-        val far = loc[farIdx]
-        val farRange = sqrt(far.first * far.first + far.second * far.second)
-        val az = atan2(far.second, far.first)
+
+        fun projAlong(lon: Double, lat: Double): Pair<Double, Double> {
+            val (mx, my) = localMetres(lon, lat, oLon, oLat)
+            return (mx * cos(az) + my * sin(az)) to (-mx * sin(az) + my * cos(az))
+        }
+
+        val shotAlong: Double
+        val shotCross: Double
+        if (line == null || shot == null) {
+            shotAlong = 0.0
+            shotCross = 0.0
+        } else {
+            val (a, c) = projAlong(shot.lon, shot.lat)
+            require(a >= -200.0 && a <= farRange + 200.0) {
+                "source is outside the A-B profile line (${"%.0f".format(a)} m along the line)"
+            }
+            shotAlong = a.coerceIn(0.0, farRange)
+            shotCross = c
+        }
 
         val along = DoubleArray(receivers.size)
         val cross = DoubleArray(receivers.size)
-        for (i in loc.indices) {
-            along[i] = loc[i].first * cos(az) + loc[i].second * sin(az)
-            cross[i] = -loc[i].first * sin(az) + loc[i].second * cos(az)
+        for (i in receivers.indices) {
+            val (a, c) = projAlong(receivers[i].lon, receivers[i].lat)
+            if (line == null) {
+                along[i] = a
+                cross[i] = c
+            } else {
+                require(a >= -200.0 && a <= farRange + 200.0) {
+                    "receiver ${i + 1} is outside the A-B profile line (${"%.0f".format(a)} m along the line)"
+                }
+                along[i] = a.coerceIn(0.0, farRange)
+                cross[i] = c
+            }
         }
-        val xStart = min(0.0, along.min())
-        val xEnd = max(0.0, along.max())
+        val xStart: Double
+        val xEnd: Double
+        if (line == null) {
+            xStart = min(0.0, along.min())
+            xEnd = max(0.0, along.max())
+        } else {
+            // the whole profile line is the corridor: place Q and receivers inside it
+            xStart = 0.0
+            xEnd = farRange
+        }
         val lineLen = xEnd - xStart
         require(lineLen >= 100.0) { "line too short (${"%.0f".format(lineLen)} m)" }
         val maxCross = cross.maxByOrNull { kotlin.math.abs(it) }?.let { kotlin.math.abs(it) } ?: 0.0
         if (maxCross > max(100.0, 0.05 * lineLen)) {
             warnings.add("2.5-D: receivers have cross-track offsets up to ${"%.0f".format(maxCross)} m (${"%.1f".format(100 * maxCross / lineLen)} % of range); they are projected onto the slice line")
         }
+        if (line != null && shot != null && kotlin.math.abs(shotCross) > max(100.0, 0.05 * lineLen)) {
+            warnings.add("2.5-D: source is ${"%.0f".format(kotlin.math.abs(shotCross))} m off the profile line; it is projected onto it")
+        }
 
         // ---- grid sizing, slice sampling (iterate on dx) ------------------
-        val dx0 = max(1.0, ceil(BottomClasses.WATER.vp / (PPW * shot.f0)))
+        val f0 = shot?.f0 ?: PREVIEW_F0
+        val dx0 = max(1.0, ceil(BottomClasses.WATER.vp / (PPW * f0)))
         var dx = dx0
         var plan2: SliceArrays? = null
         var dims: Dims? = null
         var coarsened = false
         for (iter in 0 until 12) {
-            val margin = max(max((PML_CELLS + 8) * dx, 2.0 * BottomClasses.WATER.vp / shot.f0), 500.0)
+            val margin = max(max((PML_CELLS + 8) * dx, 2.0 * BottomClasses.WATER.vp / f0), 500.0)
             val nx = (ceil((lineLen + 2.0 * margin) / dx).toInt() + 1).coerceAtLeast(16)
-            val sl = sampleSlice(grid, sed, shot, receivers[farIdx], xStart, xEnd, margin, dx, nx, az, farRange)
+            val sl = sampleSlice(grid, sed, oLon, oLat, brg, ang, xStart, margin, dx, nx, farRange)
             val zBuffer = max(max(0.25 * sl.bathyMax, 400.0), (PML_CELLS + 6) * dx)
             val zNeeded = max(
-                max(sl.bathyMax + sl.sedMax + zBuffer, maxReceiverDepth(receivers) + 4 * dx),
-                shot.depthM + 4 * dx,
+                max(sl.bathyMax + sl.sedMax + zBuffer, if (receivers.isEmpty()) 0.0 else maxReceiverDepth(receivers) + 4 * dx),
+                (shot?.depthM ?: 0.0) + 4 * dx,
             )
             val nz = (ceil(zNeeded / dx).toInt() + 1).coerceAtLeast(16)
             if (nx.toLong() * nz <= MAX_CELLS && nx <= MAX_NX) {
@@ -213,14 +317,28 @@ object FdtdExport {
         val d = dims!!
 
         if (coarsened) {
-            warnings.add("grid auto-coarsened to dx = dz = $dx m — below the ${PPW.toInt()} ppw target at ${shot.f0} Hz; consider a shorter line or lower f0")
+            warnings.add("grid auto-coarsened to dx = dz = $dx m — below the ${PPW.toInt()} ppw target at ${f0} Hz; consider a shorter line or lower f0")
         }
 
-        // shot grid position
-        val sourceX = (sl.margin + (0.0 - xStart)).coerceAtMost(d.xmax - sl.margin)
-        require(sourceX in sl.margin..(d.xmax - sl.margin)) { "source framing failed" }
-        val ix = (sourceX / d.dx).toInt() + 1
-        val iz = (shot.depthM / d.dz).toInt() + 1
+        // shot grid position (projection along the slice line)
+        val sourceX: Double?
+        val ix: Int?
+        val iz: Int?
+        if (shot != null) {
+            val sx0 = if (line == null) {
+                (sl.margin + (0.0 - xStart)).coerceAtMost(d.xmax - sl.margin)
+            } else {
+                sl.margin + (shotAlong - xStart)
+            }
+            require(sx0 in sl.margin..(d.xmax - sl.margin)) { "source framing failed" }
+            sourceX = sx0
+            ix = (sx0 / d.dx).toInt() + 1
+            iz = (shot.depthM / d.dz).toInt() + 1
+        } else {
+            sourceX = null
+            ix = null
+            iz = null
+        }
 
         // receiver grid positions (projected along the slice line)
         val recX = DoubleArray(receivers.size)
@@ -232,7 +350,7 @@ object FdtdExport {
             }
         }
 
-        val tmaxHint = 1.3 * (d.xmax - sourceX + d.zmax) / BottomClasses.WATER.vp + 20.0 / shot.f0
+        val tmaxHint = 1.3 * (d.xmax - (sourceX ?: 0.0) + d.zmax) / BottomClasses.WATER.vp + 20.0 / f0
 
         val counts = BottomClass.entries.associateWith { c -> sl.classId.count { it == c } }
         if (sl.landNodes > 0) {
@@ -247,7 +365,14 @@ object FdtdExport {
             coarsened = coarsened, landNodes = sl.landNodes,
             tmaxHintS = tmaxHint, warnings = warnings,
         )
-        return Stage(shot, receivers, sl, d, sourceX, ix, iz, recX, counts, warnings, plan)
+        return Stage(shot, receivers, sl, d, sourceX, ix, iz, recX, counts, warnings, plan, line)
+    }
+
+    /** Local equirectangular metres of (lon, lat) about (oLon, oLat). */
+    private fun localMetres(lon: Double, lat: Double, oLon: Double, oLat: Double): Pair<Double, Double> {
+        val mLat = EARTH_R_M * (lat - oLat) * PI / 180.0
+        val mLon = EARTH_R_M * (lon - oLon) * PI / 180.0 * cos((oLat + lat) / 2.0 * PI / 180.0)
+        return mLon to mLat
     }
 
     private class Dims(val nx: Int, val nz: Int, val dx: Double, val dz: Double, val xmax: Double, val zmax: Double)
@@ -259,6 +384,8 @@ object FdtdExport {
         val sedBase: DoubleArray,
         val sed: List<BottomClasses.Props>,
         val classId: List<BottomClass>,
+        val colLon: DoubleArray,
+        val colLat: DoubleArray,
         val bathyMax: Double,
         val sedMax: Double,
         val landNodes: Int,
@@ -271,17 +398,20 @@ object FdtdExport {
 
     /**
      * Sample the environment along the slice: column j of the export grid
-     * sits [dx] metres apart; world coordinate s runs 0 (shot) .. farRange
-     * (farthest receiver) along the great-circle bearing.
+     * sits [dx] metres apart; world coordinate s runs 0 (frame origin) ..
+     * farRange (line end or farthest receiver) along the great-circle
+     * bearing. Also records the lon/lat of every column centre so the UI
+     * can map section positions back onto the map.
      */
     private fun sampleSlice(
-        grid: GeoGrid, sed: SedGrid, shot: FdtdShot, far: FdtdReceiver,
-        xStart: Double, xEnd: Double, margin: Double, dx: Double, nx: Int,
-        az: Double, farRange: Double,
+        grid: GeoGrid, sed: SedGrid, frameLon: Double, frameLat: Double,
+        brg: Double, ang: Double, xStart: Double, margin: Double, dx: Double, nx: Int,
+        farRange: Double,
     ): SliceArrays {
-        val (brg, ang) = bearing(shot.lon, shot.lat, far.lon, far.lat)
         val bathy = DoubleArray(nx)
         val sedBase = DoubleArray(nx)
+        val colLon = DoubleArray(nx)
+        val colLat = DoubleArray(nx)
         val sedProps = ArrayList<BottomClasses.Props>(nx)
         val classIds = ArrayList<BottomClass>(nx)
         var bathyMax = 0.0
@@ -291,7 +421,9 @@ object FdtdExport {
         var lastThick = -1.0
         for (j in 0 until nx) {
             val sWorld = (xStart + (j * dx - margin)).coerceIn(0.0, farRange)
-            val (lonJ, latJ) = destination(shot.lon, shot.lat, brg, sWorld, ang)
+            val (lonJ, latJ) = destination(frameLon, frameLat, brg, sWorld, ang)
+            colLon[j] = lonJ
+            colLat[j] = latJ
             var e = grid.sample(lonJ, latJ).toDouble()
             if (e.isNaN()) {
                 if (lastBathy < 0) {
@@ -329,7 +461,7 @@ object FdtdExport {
                 sedMax = max(sedMax, sedBase[j] - w)
             }
         }
-        return SliceArrays(dx2 = dx, margin = margin, bathy = bathy, sedBase = sedBase, sed = sedProps, classId = classIds, bathyMax = bathyMax, sedMax = sedMax, landNodes = landNodes)
+        return SliceArrays(dx2 = dx, margin = margin, bathy = bathy, sedBase = sedBase, sed = sedProps, classId = classIds, colLon = colLon, colLat = colLat, bathyMax = bathyMax, sedMax = sedMax, landNodes = landNodes)
     }
 
     /** Great-circle initial bearing (rad) and angular distance (rad) between two points. */
@@ -362,7 +494,7 @@ object FdtdExport {
         st: Stage,
         sourceNote: String,
     ): String {
-        val shot = st.shot
+        val shot = st.shot ?: throw IllegalStateException("env.jl export requires a source")
         val receivers = st.receivers
         val sl = st.sl
         val d = st.d
@@ -371,10 +503,12 @@ object FdtdExport {
         val recvList = receivers.withIndex().joinToString(", ") { (i, r) ->
             "R${i + 1} (${f(r.lon)}, ${f(r.lat)}) @ ${f(r.depthM)} m"
         }
+        // when an explicit A-B survey line is set, the note carries it (legacy output unchanged otherwise)
+        val lineNote = st.line?.let { " | profile A (${f(it.lon0)}, ${f(it.lat0)}) to B (${f(it.lon1)}, ${f(it.lat1)})" } ?: ""
         val hdr = headerComment(
             "env.jl — Fdtd2DElastic environment exported by BathyApp",
             listOf(
-                "Bathymetry : " + sourceNote,
+                "Bathymetry : " + sourceNote + lineNote,
                 "Sediment   : GlobSed v3 total sediment thickness (NOAA NCEI, 5 arc min, metres)",
                 "Shot       : (${f(shot.lon)}, ${f(shot.lat)}), depth ${f(shot.depthM)} m",
                 "Receivers  : $recvList",
@@ -454,14 +588,14 @@ object FdtdExport {
     // ------------------------------------------------------------- source.jl
 
     private fun writeSource(st: Stage): String {
-        val shot = st.shot
+        val shot = st.shot ?: throw IllegalStateException("source.jl export requires a source")
         val receivers = st.receivers
         val sl = st.sl
         val d = st.d
         val warnings = st.warnings
-        val sourceX = st.sourceX
-        val ix = st.ix
-        val iz = st.iz
+        val sourceX = st.sourceX ?: throw IllegalStateException("source.jl export requires a source")
+        val ix = st.ix ?: throw IllegalStateException("source.jl export requires a source")
+        val iz = st.iz ?: throw IllegalStateException("source.jl export requires a source")
         val recX = st.recX
         val kind = if (shot.waveform == FdtdWaveform.HANN) "Hann pulse" else "Ricker (derivative)"
         val header = headerComment(

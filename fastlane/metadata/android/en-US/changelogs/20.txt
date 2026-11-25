@@ -1,0 +1,7 @@
+Full 2-D section editor for survey design:
+- New "2D" mode: the cross-section fills the screen. Drag the source and receivers directly in the section, both along-profile and in depth.
+- Tap the water in the section to place a missing source or add a receiver exactly where you want it.
+- Optional A-B survey line: set A and B in "Profil" mode and the section follows the line from A to B, stable while dragging. Without a line it spans source to farthest receiver as before.
+- With an A-B line set, the section previews before anything is placed: open 2D and tap straight into the water column.
+- Markers drawn at full width with position readout (x km / depth m); quick-tap still opens the editor sheets.
+- env.jl + source.jl now carry the profile line note; source depth/position changes project onto the slice line (2.5-D warnings preserved).

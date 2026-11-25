@@ -1,0 +1,7 @@
+Voller 2D-Schnitt-Editor für das Survey-Design:
+- Neuer „2D"-Modus: der Querschnitt füllt den Bildschirm. Quelle und Receiver direkt im Schnitt ziehen, entlang des Profils und in der Tiefe.
+- Ins Wasser im Schnitt tippen: fehlende Quelle platzieren oder Receiver exakt dort setzen.
+- Optionale A-B-Survey-Linie: in „Profil" A und B tippen, der Schnitt folgt der Linie von A nach B und bleibt beim Ziehen stabil. Ohne Linie spannt er Quelle bis fernstem Receiver (wie bisher).
+- Mit A-B-Linie gibt es die Vorschau schon vor dem Platzieren: 2D öffnen und direkt in die Wassersäule tippen.
+- Marker in voller Größe Positions-Anzeige (x km / Tiefe m); Antippen öffnet weiterhin die Editor-Sheets.
+- env.jl + source.jl führen jetzt die Profillinie im Header; Quelle/Receiver werden auf die Schnittrichtung projiziert (2.5-D-Warnungen bleiben).

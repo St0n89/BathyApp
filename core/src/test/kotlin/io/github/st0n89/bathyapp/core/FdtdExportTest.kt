@@ -5,6 +5,7 @@ import io.github.st0n89.bathyapp.core.seismic.BottomClass
 import io.github.st0n89.bathyapp.core.seismic.BottomClasses
 import io.github.st0n89.bathyapp.core.seismic.FdtdExport
 import io.github.st0n89.bathyapp.core.seismic.FdtdExportResult
+import io.github.st0n89.bathyapp.core.seismic.FdtdLine
 import io.github.st0n89.bathyapp.core.seismic.FdtdReceiver
 import io.github.st0n89.bathyapp.core.seismic.FdtdShot
 import io.github.st0n89.bathyapp.core.seismic.FdtdWaveform
@@ -265,5 +266,92 @@ class FdtdExportTest {
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message!!.contains("land"))
         }
+    }
+
+    // ---- A-B profile line mode + interactive section editor (v0.12.0) ----
+
+    /** A(0,0) -> B(0.1, 0): ~11.1 km on the equator. */
+    private val line = FdtdLine(0.0, 0.0, 0.1, 0.0)
+
+    @Test
+    fun lineModeSpansWholeProfileLine() {
+        val s = FdtdExport.slice(waterGrid(), sedGrid(), shot.copy(lon = 0.02), listOf(FdtdReceiver(0.06, 0.0, 900.0), FdtdReceiver(0.04, 0.0, 950.0)), "GEBCO test", line)
+        assertTrue(s.hasLine)
+        // corridor = the whole line; x starts at A (column 0 clamps to 0 m)
+        assertEquals(11119.5, s.plan.lineLenM, 50.0)
+        assertEquals(0.0, s.colLon[0], 1e-9)
+        assertEquals(0.0, s.colLat[0], 1e-9)
+        assertTrue("columns must reach B", s.colLon.any { it > 0.09 })
+        assertEquals(s.plan.nx, s.classes.size)
+        assertEquals(s.plan.nx, s.colLon.size)
+        assertEquals(s.plan.nx, s.colLat.size)
+        // shot between the receivers on the line
+        assertTrue(s.recXm[0] > s.shotXm)
+        assertTrue(s.recXm[1] in s.shotXm..s.recXm[0])
+        assertEquals(1000.0, s.bathy.max(), 1.0)
+    }
+
+    @Test
+    fun linePreviewWithoutShotAndReceiversWorks() {
+        val s = FdtdExport.slice(waterGrid(), sedGrid(), null, emptyList(), "t", line)
+        assertTrue(s.hasLine)
+        assertEquals(-1.0, s.shotXm, 1e-12)
+        assertEquals(0.0, s.shotDepthM, 1e-12)
+        assertEquals(0, s.recXm.size)
+        assertTrue(s.classes.isNotEmpty())
+        assertEquals(s.plan.nx, s.colLon.size)
+        // a real export still demands receivers
+        try {
+            FdtdExport.build(waterGrid(), sedGrid(), shot, emptyList(), "t", line)
+            throw AssertionError("build must require receivers")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("receivers"))
+        }
+        // and without a line, no placement means no preview
+        try {
+            FdtdExport.slice(waterGrid(), sedGrid(), null, emptyList(), "t")
+            throw AssertionError("slice without line and without placement must throw")
+        } catch (e: IllegalArgumentException) {
+            // no receivers placed / no source placed
+        }
+    }
+
+    @Test
+    fun lineModeOutsidePlacementRejectedButCrossTrackProjects() {
+        // along outside [0, line length] -> rejected
+        try {
+            FdtdExport.build(waterGrid(), sedGrid(), shot.copy(lon = 0.3), listOf(receiver), "t", line)
+            throw AssertionError("source outside the line must be rejected")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("outside the A-B profile line"))
+        }
+        try {
+            FdtdExport.build(waterGrid(), sedGrid(), shot.copy(lon = 0.05), listOf(receiver.copy(lon = 0.3)), "t", line)
+            throw AssertionError("receiver outside the line must be rejected")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("outside the A-B profile line"))
+        }
+        // cross-track offset stays allowed: projected onto the line with a warning
+        val recOff = FdtdReceiver(0.05, 0.05, 900.0)
+        val r = FdtdExport.build(waterGrid(), sedGrid(), shot.copy(lon = 0.02), listOf(recOff), "t", line)
+        assertTrue(r.plan.warnings.any { it.contains("projected onto the slice line") })
+        assertTrue(r.plan.maxCrossTrackM > 5000.0)
+    }
+
+    @Test
+    fun lineModeBuildAndSliceAgree() {
+        val grid = waterGrid()
+        val sed = sedGrid()
+        val sh = shot.copy(lon = 0.02)
+        val recs = listOf(FdtdReceiver(0.06, 0.0, 900.0))
+        val s = FdtdExport.slice(grid, sed, sh, recs, "t", line)
+        val r = FdtdExport.build(grid, sed, sh, recs, "t", line)
+        assertEquals(r.plan.dx, s.dx, 1e-12)
+        assertEquals(r.plan.nx, s.classes.size)
+        assertEquals(s.shotXm, doubleVar(srcOf(r), "source_x"), 1e-6)
+        assertEquals(s.recXm[0], arrayTokens(srcOf(r), "receiver_x")[0], 1e-6)
+        assertTrue("env must mention the profile", envOf(r).contains("profile A ("))
+        // source x from the slice round-trips as the ix Int index
+        assertEquals((s.shotXm / s.dx).toInt() + 1, intVar(srcOf(r), "ix"))
     }
 }

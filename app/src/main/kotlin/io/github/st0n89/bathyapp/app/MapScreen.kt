@@ -90,6 +90,7 @@ private val MudCol = Color(0xFF8D6E63)
 private val SandCol = Color(0xFFC9A96A)
 private val RockCol = Color(0xFF78909C)
 private val BasementCol = Color(0xFF37474F)
+private val LandCol = Color(0xFF6B4F3F)
 private val PreviewBg = Color(0xFF1D262E)
 
 /** What the marker editor sheet currently edits. */
@@ -276,6 +277,16 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
         // ---- canvas: bathy raster, markers, gestures -------------------
 
         val moveSlopPx = with(density) { 14.dp.toPx() }
+
+        if (state.fdtdMode == FdtdPlacementMode.SECTION) {
+            SectionEditor(
+                vm = vm,
+                state = state,
+                onEditShot = { editTarget = EditTarget.Shot },
+                onEditReceiver = { editTarget = EditTarget.Rec(it) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -338,6 +349,7 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                             FdtdPlacementMode.RECEIVER -> curVm.addReceiver(lon, lat)
                             FdtdPlacementMode.AB -> curVm.setPoint(lon, lat)
                             FdtdPlacementMode.MAP -> { /* marker taps handled by the drag detector */ }
+                            FdtdPlacementMode.SECTION -> { /* the section editor replaces the map canvas */ }
                         }
                     }
                 }
@@ -364,7 +376,9 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
 
             val a = state.pointA
             val b = state.pointB
-            if (state.fdtdMode == FdtdPlacementMode.AB && a != null && b != null) {
+            val lineOn = a != null && b != null
+            // the A-B pair doubles as the survey line for the 2-D section: keep it visible in every mode
+            if (lineOn) {
                 drawLine(
                     color = Color.White.copy(alpha = 0.85f),
                     start = toPixel(a[0], a[1]),
@@ -374,16 +388,18 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)),
                 )
             }
-            if (state.fdtdMode == FdtdPlacementMode.AB) {
+            if (lineOn) {
                 a?.let {
                     val p = toPixel(it[0], it[1])
                     drawCircle(Color.White, radius = 14f, center = p)
                     drawCircle(MarkerA, radius = 9f, center = p)
+                    drawText("A", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
                 }
                 b?.let {
                     val p = toPixel(it[0], it[1])
                     drawCircle(Color.White, radius = 14f, center = p)
                     drawCircle(MarkerB, radius = 9f, center = p)
+                    drawText("B", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
                 }
             }
 
@@ -435,6 +451,7 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 )
             }
         }
+        }
 
         // ---- top overlay: mode pill + hint ------------------------------
 
@@ -448,28 +465,34 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.MAP,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.MAP) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 4),
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 5),
                 ) { Text("Karte") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.SOURCE,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.SOURCE) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 4),
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 5),
                 ) { Text("Quelle") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.RECEIVER,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.RECEIVER) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 4),
+                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 5),
                 ) { Text("Receiver") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.AB,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.AB) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 3, count = 4),
+                    shape = SegmentedButtonDefaults.itemShape(index = 3, count = 5),
                 ) { Text("Profil") }
+                SegmentedButton(
+                    selected = state.fdtdMode == FdtdPlacementMode.SECTION,
+                    onClick = { vm.setFdtdMode(FdtdPlacementMode.SECTION) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 4, count = 5),
+                ) { Text("2D") }
             }
             val hint = when (state.fdtdMode) {
                 FdtdPlacementMode.SOURCE -> "Auf Wasser tippen: Quelle setzen (später verschieb- und antippbar)"
                 FdtdPlacementMode.RECEIVER -> "Tippen: Receiver am Meeresboden (mehrere möglich)"
-                FdtdPlacementMode.AB -> "1. Tipp = A, 2. Tipp = B, dann „Profil“ in der Übersicht"
+                FdtdPlacementMode.AB -> "1. Tipp = A, 2. Tipp = B (optional): die Linie steuert den 2D-Schnitt"
+                FdtdPlacementMode.SECTION -> null
                 FdtdPlacementMode.MAP -> if (state.shot == null && state.receivers.isEmpty()) {
                     "Quelle und Receiver über die Pille setzen, Marker antippen zum Bearbeiten"
                 } else null
@@ -643,7 +666,7 @@ private fun nextStep(state: AppUiState): String = when {
     state.shot == null -> "1. „Quelle“ wählen und auf Wasser tippen"
     state.receivers.isEmpty() -> "2. „Receiver“ wählen und auf Wasser tippen"
     state.sediment == null -> "3. „Meeresboden“ laden (einmalig, GlobSed-Datensatz)"
-    else -> "Bereit: Marker verschieben zum Anpassen, dann exportieren"
+    else -> "Bereit: im „2D“-Schnitt verfeinern (ziehen/antippbar) oder direkt exportieren"
 }
 
 // ===========================================================================
@@ -977,6 +1000,281 @@ private fun ReceiverSheet(vm: AppViewModel, state: AppUiState, index: Int, onDis
             }
         }
     }
+}
+
+// ===========================================================================
+// 2-D section editor: full-screen slice, direct source/receiver placement
+// ===========================================================================
+
+/**
+ * The interactive 2-D cross-section: drag Q/R markers freely (along-profile
+ * position AND depth), quick-tap a marker for its editor sheet, tap the water
+ * to place a missing source or add a receiver. With an A-B survey line set
+ * the section frame is stable and spans the whole line; without it the
+ * section spans shot -> farthest receiver (and moves as you drag Q).
+ */
+@Composable
+private fun SectionEditor(
+    vm: AppViewModel,
+    state: AppUiState,
+    onEditShot: () -> Unit,
+    onEditReceiver: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val sl = state.fdtdSlice
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    var dragTarget by remember { mutableStateOf<EditTarget?>(null) }
+    var dragPos by remember { mutableStateOf<Offset?>(null) }
+    val curState by rememberUpdatedState(state)
+    val curVm by rememberUpdatedState(vm)
+
+    if (sl == null || sl.classes.size < 2) {
+        Column(
+            modifier = modifier.padding(horizontal = 20.dp, vertical = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("2D-Schnitt", style = MaterialTheme.typography.titleLarge)
+            Text(
+                sectionMissingText(curState),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (curState.sediment == null && !curState.bottomLoading) {
+                    AssistChip(onClick = { curVm.loadBottomType() }, label = { Text("Meeresboden") })
+                }
+                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.SOURCE) }, label = { Text("Quelle") })
+                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.RECEIVER) }, label = { Text("Receiver") })
+                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.AB) }, label = { Text("A-B-Linie") })
+            }
+            Text(
+                "Tipp: mit „Profil“ zwei Punkte (A, B) in der Karte tippen. Der Schnitt folgt dann der Linie und bleibt beim Ziehen stabil.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
+    val n = sl.classes.size
+    val totalM = (n - 1) * sl.dx
+
+    /** lon/lat interpolated between the two bracketing slice columns. */
+    fun lonLatAt(xM: Double): Pair<Double, Double> {
+        val f = (xM / sl.dx).coerceIn(0.0, (n - 1).toDouble())
+        val j0 = f.toInt().coerceIn(0, n - 2)
+        val j1 = j0 + 1
+        val t = f - j0
+        return (sl.colLon[j0] + (sl.colLon[j1] - sl.colLon[j0]) * t) to
+            (sl.colLat[j0] + (sl.colLat[j1] - sl.colLat[j0]) * t)
+    }
+
+    /** Section x (m) of the slice column nearest to (lon, lat). */
+    fun xMetersOf(lon: Double, lat: Double): Double {
+        var best = 0
+        var bestD = Double.MAX_VALUE
+        var jj = 0
+        while (jj < n) {
+            val dl = sl.colLon[jj] - lon
+            val dt = sl.colLat[jj] - lat
+            val d = dl * dl + dt * dt
+            if (d < bestD) {
+                bestD = d
+                best = jj
+            }
+            jj++
+        }
+        return best * sl.dx
+    }
+
+    val moveSlopPx = with(density) { 14.dp.toPx() }
+    val grabPx = 30f * density.density
+
+    // key on geometry (nx/dx/hasLine), NOT on the slice: DoubleArray equals is
+    // identity, so keying on the slice would cancel a running drag on every
+    // debounced recompute
+    val geomKey = Triple(sl.plan.nx, sl.dx, sl.hasLine)
+
+    Canvas(
+        modifier = modifier
+            .onSizeChanged { canvasSize = it }
+            .background(PreviewBg)
+            .pointerInput(geomKey) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val w = canvasSize.width.toFloat()
+                    val h = canvasSize.height.toFloat()
+                    if (w <= 0f || h <= 0f) return@awaitEachGesture
+                    val s = curState
+                    var tgt: EditTarget? = null
+                    s.shot?.let { sh ->
+                        val px = Offset(
+                            (xMetersOf(sh.lon, sh.lat) / totalM * w).toFloat(),
+                            (sh.depthM / sl.zmaxM * h).toFloat(),
+                        )
+                        if ((px - down.position).getDistance() <= grabPx) tgt = EditTarget.Shot
+                    }
+                    if (tgt == null) {
+                        for ((i, r) in s.receivers.withIndex()) {
+                            val px = Offset(
+                                (xMetersOf(r.lon, r.lat) / totalM * w).toFloat(),
+                                (r.depthM / sl.zmaxM * h).toFloat(),
+                            )
+                            if ((px - down.position).getDistance() <= grabPx) {
+                                tgt = EditTarget.Rec(i)
+                                break
+                            }
+                        }
+                    }
+                    val target = tgt ?: return@awaitEachGesture
+                    // marker grabbed: own the gesture, quick-tap opens the editor
+                    down.consume()
+                    var moved = false
+                    dragTarget = target
+                    dragPos = down.position
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (!moved) {
+                                when (target) {
+                                    is EditTarget.Shot -> onEditShot()
+                                    is EditTarget.Rec -> onEditReceiver(target.index)
+                                }
+                            }
+                            break
+                        }
+                        if (!moved && (change.position - down.position).getDistance() > moveSlopPx) moved = true
+                        if (moved) {
+                            val xM = (change.position.x / w).coerceIn(0f, 1f) * totalM
+                            val zM = (change.position.y / h).coerceIn(0f, 1f) * sl.zmaxM
+                            val (lon, lat) = lonLatAt(xM)
+                            when (target) {
+                                is EditTarget.Shot -> curVm.moveShot(lon, lat, zM)
+                                is EditTarget.Rec -> curVm.moveReceiver(target.index, lon, lat, zM)
+                            }
+                        }
+                        dragPos = change.position
+                        change.consume()
+                    }
+                    dragTarget = null
+                    dragPos = null
+                }
+            }
+            .pointerInput(geomKey) {
+                detectTapGestures { tap ->
+                    val w = canvasSize.width.toFloat()
+                    val h = canvasSize.height.toFloat()
+                    if (w <= 0f || h <= 0f) return@detectTapGestures
+                    val xM = (tap.x / w).coerceIn(0f, 1f) * totalM
+                    val zM = (tap.y / h).coerceIn(0f, 1f) * sl.zmaxM
+                    val (lon, lat) = lonLatAt(xM)
+                    if (curState.shot == null) curVm.placeShot(lon, lat, zM) else curVm.addReceiver(lon, lat, zM)
+                }
+            },
+    ) {
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+        val zScale = h / sl.zmaxM.toFloat().coerceAtLeast(0.1f)
+        val step = max(1, n / 720)
+
+        // environment bands
+        var j = 0
+        while (j < n) {
+            val x = w * j / (n - 1)
+            val bw = w * step / (n - 1) + 1f
+            val bathy = sl.bathy[j].toFloat() * zScale
+            val sedBase = sl.sedBase[j].toFloat() * zScale
+            if (bathy <= 0f) {
+                // land column: basement up to the free surface + brown marker strip
+                drawRect(BasementCol, topLeft = Offset(x, 0f), size = Size(bw, h))
+                drawRect(LandCol, topLeft = Offset(x, 0f), size = Size(bw, 6f))
+            } else {
+                drawRect(WaterCol.copy(alpha = 0.8f), topLeft = Offset(x, 0f), size = Size(bw, bathy))
+                when (sl.classes[j]) {
+                    BottomClass.MUD -> drawRect(MudCol, topLeft = Offset(x, bathy), size = Size(bw, max(0f, sedBase - bathy)))
+                    BottomClass.SAND -> drawRect(SandCol, topLeft = Offset(x, bathy), size = Size(bw, max(0f, sedBase - bathy)))
+                    BottomClass.ROCK -> {}
+                }
+                val baseTop = max(bathy, sedBase)
+                drawRect(BasementCol, topLeft = Offset(x, baseTop), size = Size(bw, h - baseTop))
+            }
+            j += step
+        }
+
+        // seafloor + sediment base accent lines
+        val path = Path()
+        val sedPath = Path()
+        var i = 0
+        while (i < n) {
+            val x = w * i / (n - 1)
+            val y = sl.bathy[i].toFloat() * zScale
+            val y2 = sl.sedBase[i].toFloat() * zScale
+            if (i == 0) {
+                path.moveTo(x, y)
+                sedPath.moveTo(x, y2)
+            } else {
+                path.lineTo(x, y)
+                sedPath.lineTo(x, y2)
+            }
+            i += step
+        }
+        drawPath(path, Color.White.copy(alpha = 0.9f), style = Stroke(width = 2f))
+        drawPath(sedPath, Color.Black.copy(alpha = 0.5f), style = Stroke(width = 1.5f))
+
+        // axes + gridlines
+        val labelPx = 11.dp.toPx()
+        for (k in 1..3) {
+            val x = w * k / 4f
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
+            drawText("%.0f km".format(sl.plan.lineLenM / 1000.0 * k / 4.0), x - 20f, 14 * labelPx / 11f, labelPx, Color.White.copy(alpha = 0.75f))
+            val y = h * k / 4f
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(0f, y), Offset(w, y), strokeWidth = 1f)
+            drawText("%.0f m".format(sl.zmaxM * k / 4.0), w - 44f, y - 4f, labelPx, Color.White.copy(alpha = 0.75f))
+        }
+
+        // A/B letters when the section follows a survey line
+        if (sl.hasLine) {
+            drawText("A", 8f, h - 10f, 13.dp.toPx(), Color.White)
+            drawText("B", w - 22f, h - 10f, 13.dp.toPx(), Color.White)
+        }
+
+        // live markers from state (not the slice): they follow the finger instantly
+        val st = curState
+        for ((k, r) in st.receivers.withIndex()) {
+            val x = (xMetersOf(r.lon, r.lat) / totalM * w).toFloat().coerceIn(0f, w)
+            val y = (r.depthM.toFloat() * zScale).coerceIn(0f, h)
+            drawCircle(Color.White, radius = 13f, center = Offset(x, y))
+            drawCircle(MarkerRecv, radius = 8f, center = Offset(x, y))
+            drawText("R${k + 1}", x + 16f, y - 8f, 12.dp.toPx(), Color.White)
+        }
+        st.shot?.let { sh ->
+            val x = (xMetersOf(sh.lon, sh.lat) / totalM * w).toFloat().coerceIn(0f, w)
+            val y = (sh.depthM.toFloat() * zScale).coerceIn(0f, h)
+            drawCircle(Color.White, radius = 16f, center = Offset(x, y))
+            drawCircle(MarkerShot, radius = 11f, center = Offset(x, y))
+            drawText("Q", x - 4f, y + 26f, 14.dp.toPx(), Color.White)
+        }
+
+        // drag crosshair + live position readout
+        if (dragTarget != null && dragPos != null) {
+            val dp = dragPos!!
+            drawLine(Color.White.copy(alpha = 0.55f), Offset(0f, dp.y), Offset(w, dp.y), strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+            drawLine(Color.White.copy(alpha = 0.55f), Offset(dp.x, 0f), Offset(dp.x, h), strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+            val xM = (dp.x / w).coerceIn(0f, 1f) * totalM
+            val zM = (dp.y / h).coerceIn(0f, 1f) * sl.zmaxM
+            drawText("x %.1f km · z %.0f m".format(xM / 1000.0, zM), (dp.x + 12f).coerceAtMost(w - 130f), (dp.y - 12f).coerceAtLeast(28f), 12.dp.toPx(), Color.White)
+        }
+    }
+}
+
+private fun sectionMissingText(state: AppUiState): String = when {
+    state.bottomLoading -> "Meeresbodendaten laden …"
+    state.sediment == null -> "Für den 2D-Schnitt fehlen die Meeresbodendaten (GlobSed, einmaliger Download). Danach genügt eine A-B-Linie für eine Vorschau."
+    state.shot == null && state.receivers.isEmpty() && state.pointA == null -> "Noch nichts platziert: Quelle und Receiver in der Karte antippen, oder eine A-B-Linie ziehen und hier ins Wasser tippen."
+    else -> "Schnitt wird berechnet …"
 }
 
 // ===========================================================================

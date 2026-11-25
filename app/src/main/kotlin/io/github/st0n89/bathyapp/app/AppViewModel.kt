@@ -19,6 +19,7 @@ import io.github.st0n89.bathyapp.core.profile.ProfileStats
 import io.github.st0n89.bathyapp.core.seismic.FdtdExport
 import io.github.st0n89.bathyapp.core.seismic.FdtdExportPlan
 import io.github.st0n89.bathyapp.core.seismic.FdtdExportResult
+import io.github.st0n89.bathyapp.core.seismic.FdtdLine
 import io.github.st0n89.bathyapp.core.seismic.FdtdReceiver
 import io.github.st0n89.bathyapp.core.seismic.FdtdShot
 import io.github.st0n89.bathyapp.core.seismic.FdtdSlice
@@ -47,7 +48,7 @@ sealed interface AppScreen {
     data object Profile : AppScreen
 }
 
-enum class FdtdPlacementMode { MAP, AB, SOURCE, RECEIVER }
+enum class FdtdPlacementMode { MAP, AB, SOURCE, RECEIVER, SECTION }
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Home,
@@ -271,9 +272,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             st.pointB == null -> st.copy(pointB = doubleArrayOf(lon, lat), profile = null, profileStats = null)
             else -> st.copy(pointB = doubleArrayOf(lon, lat), profile = null, profileStats = null)
         }
+    }.also {
+        // the A-B pair doubles as the survey line for the 2-D section
+        scheduleFdtdSliceUpdate(0L)
     }
 
-    fun clearPoints() = update { it.copy(pointA = null, pointB = null, profile = null, profileStats = null) }
+    fun clearPoints() {
+        update { it.copy(pointA = null, pointB = null, profile = null, profileStats = null) }
+        scheduleFdtdSliceUpdate(0L)
+    }
 
     fun computeProfile(samples: Int = 1000) {
         val st = _state.value
@@ -565,15 +572,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Places (or replaces) the source with sensible defaults: mid-water
-     * depth, previous (or default 25 Hz Hann) waveform settings.
+     * depth (or the depth the caller tapped in the 2-D section), previous
+     * (or default 25 Hz Hann) waveform settings.
      */
-    fun placeShot(lon: Double, lat: Double) {
+    fun placeShot(lon: Double, lat: Double, depthM: Double? = null) {
         val floor = seafloorDepthAt(lon, lat)
         if (floor < 10.0) {
             update { it.copy(error = "Zu flach für eine Quelle (${floor.toInt()} m Wasser) — in tieferem Wasser platzieren.") }
             return
         }
-        val depth = (floor / 2.0).coerceIn(1.0, floor - 1.0)
+        val depth = (depthM ?: floor / 2.0).coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
         update {
             it.copy(
                 shot = FdtdShot(
@@ -589,10 +597,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Live-update while dragging: depth is clamped into the water column below. */
-    fun moveShot(lon: Double, lat: Double) {
+    fun moveShot(lon: Double, lat: Double, depthM: Double? = null) {
         val sh = _state.value.shot ?: return
         val floor = seafloorDepthAt(lon, lat)
-        val depth = if (floor < 10.0) sh.depthM else sh.depthM.coerceAtMost((floor - 1.0).coerceAtLeast(1.0))
+        val wanted = depthM ?: sh.depthM
+        val depth = if (floor < 10.0) sh.depthM else wanted.coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
         update { it.copy(shot = sh.copy(lon = lon, lat = lat, depthM = depth), fdtdPlan = null) }
         scheduleFdtdSliceUpdate()
     }
@@ -621,25 +630,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Adds a receiver on the seafloor (OBS style); depth is adjustable afterwards. */
-    fun addReceiver(lon: Double, lat: Double) {
+    fun addReceiver(lon: Double, lat: Double, depthM: Double? = null) {
         val floor = seafloorDepthAt(lon, lat)
         if (floor < 10.0) {
             update { it.copy(error = "Zu flach für einen Receiver (${floor.toInt()} m Wasser) — in tieferem Wasser platzieren.") }
             return
         }
+        val depth = (depthM ?: (floor - 1.0)).coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
         update {
-            it.copy(receivers = it.receivers + FdtdReceiver(lon, lat, (floor - 1.0).coerceAtLeast(1.0)), fdtdPlan = null, error = null)
+            it.copy(receivers = it.receivers + FdtdReceiver(lon, lat, depth), fdtdPlan = null, error = null)
         }
         scheduleFdtdSliceUpdate()
     }
 
     /** Live-update while dragging: depth is clamped into the water column below. */
-    fun moveReceiver(index: Int, lon: Double, lat: Double) {
+    fun moveReceiver(index: Int, lon: Double, lat: Double, depthM: Double? = null) {
         val st = _state.value
         if (index !in st.receivers.indices) return
         val r = st.receivers[index]
         val floor = seafloorDepthAt(lon, lat)
-        val depth = if (floor < 10.0) r.depthM else r.depthM.coerceAtMost((floor - 1.0).coerceAtLeast(1.0))
+        val wanted = depthM ?: r.depthM
+        val depth = if (floor < 10.0) r.depthM else wanted.coerceIn(1.0, (floor - 1.0).coerceAtLeast(1.0))
         update { s ->
             s.copy(
                 receivers = s.receivers.mapIndexed { i, x -> if (i == index) FdtdReceiver(lon, lat, depth) else x },
@@ -680,14 +691,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var sliceJob: Job? = null
 
     /**
+     * The A-B profile points doubled as survey line for the 2-D section.
+     * Null until both points are placed: then the slice follows A -> B,
+     * otherwise it spans shot -> farthest receiver.
+     */
+    fun surveyLine(): FdtdLine? {
+        val a = _state.value.pointA ?: return null
+        val b = _state.value.pointB ?: return null
+        return FdtdLine(a[0], a[1], b[0], b[1])
+    }
+
+    /**
      * Debounced recompute of the 2-D slice preview after any survey change
-     * (placement, drag, depth slider, GlobSed load). Cheap: samples the
-     * corridor at export resolution and never writes env/source text.
+     * (placement, drag, depth slider, GlobSed load, A-B line edit). With an
+     * A-B line set it also previews the empty line before anything is
+     * placed. Cheap: samples the corridor at export resolution and never
+     * writes env/source text.
      */
     private fun scheduleFdtdSliceUpdate(delayMs: Long = 250L) {
         sliceJob?.cancel()
         val s = _state.value
-        if (s.sediment == null || s.shot == null || s.receivers.isEmpty()) {
+        val line = surveyLine()
+        if (s.sediment == null || (s.shot == null && s.receivers.isEmpty() && line == null)) {
             if (s.fdtdSlice != null) update { it.copy(fdtdSlice = null) }
             return
         }
@@ -696,10 +721,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val st = _state.value
             val g = st.grid ?: return@launch
             val sed = st.sediment ?: return@launch
-            val sh = st.shot ?: return@launch
-            if (st.receivers.isEmpty()) return@launch
+            val ln = surveyLine()
+            if (st.shot == null && st.receivers.isEmpty() && ln == null) return@launch
             try {
-                val sl = FdtdExport.slice(g, sed, sh, st.receivers, st.gridNote ?: "BathyApp")
+                val sl = FdtdExport.slice(g, sed, st.shot, st.receivers, st.gridNote ?: "BathyApp", ln)
                 _state.value = _state.value.copy(fdtdSlice = sl)
             } catch (_: IllegalArgumentException) {
                 // preview only: keep the last valid slice; export reports the cause
@@ -717,12 +742,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (sed == null || shot == null || st.receivers.isEmpty()) return false
         return try {
             val note = st.gridNote ?: "BathyApp"
-            val r = FdtdExport.build(grid, sed, shot, st.receivers, note)
+            val r = FdtdExport.build(grid, sed, shot, st.receivers, note, surveyLine())
             fdtdResult = r
             update { it.copy(fdtdPlan = r.plan, error = r.plan.warnings.lastOrNull()?.let { w -> "Hinweis: $w" }) }
             true
         } catch (e: Exception) {
-            update { it.copy(error = e.message ?: e.toString()) }
+            update { it.copy(fdtdPlan = null, error = e.message ?: e.toString()) }
             false
         }
     }
