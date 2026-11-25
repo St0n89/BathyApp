@@ -34,8 +34,10 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,8 +47,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,6 +101,8 @@ private val PreviewBg = Color(0xFF1D262E)
 private sealed interface EditTarget {
     data object Shot : EditTarget
     data class Rec(val index: Int) : EditTarget
+    data object PointA : EditTarget
+    data object PointB : EditTarget
 }
 
 // ===========================================================================
@@ -178,6 +184,12 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
         for ((i, r) in s.receivers.withIndex()) {
             if ((pixelOf(r.lon, r.lat, x0, y0, c) - p).getDistance() <= slop) return EditTarget.Rec(i)
         }
+        s.pointA?.let {
+            if ((pixelOf(it[0], it[1], x0, y0, c) - p).getDistance() <= slop) return EditTarget.PointA
+        }
+        s.pointB?.let {
+            if ((pixelOf(it[0], it[1], x0, y0, c) - p).getDistance() <= slop) return EditTarget.PointB
+        }
         return null
     }
 
@@ -229,6 +241,7 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
     // ---- snackbar for errors/notes ----------------------------------------
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(state.error) {
         state.error?.let {
             snackbarHostState.showSnackbar(it)
@@ -259,6 +272,8 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 LaunchedEffect(Unit) { editTarget = null }
             }
         }
+        // line ends have no editor sheet; they are only draggable
+        is EditTarget.PointA, is EditTarget.PointB -> {}
         null -> {}
     }
     if (surveySheet) {
@@ -306,7 +321,7 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) {
-                                if (!moved) editTarget = target
+                                if (!moved && (target is EditTarget.Shot || target is EditTarget.Rec)) editTarget = target
                                 break
                             }
                             if (!moved && (change.position - down.position).getDistance() > slopPx) {
@@ -317,6 +332,8 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                                 when (target) {
                                     is EditTarget.Shot -> curVm.moveShot(lon, lat)
                                     is EditTarget.Rec -> curVm.moveReceiver(target.index, lon, lat)
+                                    is EditTarget.PointA -> curVm.movePoint(0, lon, lat)
+                                    is EditTarget.PointB -> curVm.movePoint(1, lon, lat)
                                 }
                             }
                             dragPos = change.position
@@ -342,13 +359,30 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                         val lon = grid.west + (col + 0.5f) * grid.dx
                         val lat = grid.north - (row + 0.5f) * grid.dy
                         when (s.fdtdMode) {
-                            FdtdPlacementMode.SOURCE -> {
-                                curVm.placeShot(lon, lat)
-                                curVm.setFdtdMode(FdtdPlacementMode.MAP)
+                            FdtdPlacementMode.MAP -> {
+                                // smart-place: first tap = shot, further taps = receivers (undo via snackbar)
+                                if (s.shot == null) {
+                                    curVm.placeShot(lon, lat)
+                                } else {
+                                    curVm.addReceiver(lon, lat)
+                                    val idx = s.receivers.size
+                                    scope.launch {
+                                        val res = snackbarHostState.showSnackbar(
+                                            "Receiver ${idx + 1} gesetzt",
+                                            actionLabel = "Rückgängig",
+                                            duration = SnackbarDuration.Short,
+                                        )
+                                        if (res == SnackbarResult.ActionPerformed) curVm.removeReceiver(idx)
+                                    }
+                                }
                             }
-                            FdtdPlacementMode.RECEIVER -> curVm.addReceiver(lon, lat)
-                            FdtdPlacementMode.AB -> curVm.setPoint(lon, lat)
-                            FdtdPlacementMode.MAP -> { /* marker taps handled by the drag detector */ }
+                            FdtdPlacementMode.AB -> {
+                                curVm.setPoint(lon, lat)
+                                // pre-tap state had A but no B: the line just completed -> show the section
+                                if (s.pointA != null && s.pointB == null) {
+                                    curVm.setFdtdMode(FdtdPlacementMode.SECTION)
+                                }
+                            }
                             FdtdPlacementMode.SECTION -> { /* the section editor replaces the map canvas */ }
                         }
                     }
@@ -388,19 +422,18 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)),
                 )
             }
-            if (lineOn) {
-                a?.let {
-                    val p = toPixel(it[0], it[1])
-                    drawCircle(Color.White, radius = 14f, center = p)
-                    drawCircle(MarkerA, radius = 9f, center = p)
-                    drawText("A", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
-                }
-                b?.let {
-                    val p = toPixel(it[0], it[1])
-                    drawCircle(Color.White, radius = 14f, center = p)
-                    drawCircle(MarkerB, radius = 9f, center = p)
-                    drawText("B", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
-                }
+            // A is visible right after the first line tap
+            a?.let {
+                val p = toPixel(it[0], it[1])
+                drawCircle(Color.White, radius = 14f, center = p)
+                drawCircle(MarkerA, radius = 9f, center = p)
+                drawText("A", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
+            }
+            b?.let {
+                val p = toPixel(it[0], it[1])
+                drawCircle(Color.White, radius = 14f, center = p)
+                drawCircle(MarkerB, radius = 9f, center = p)
+                drawText("B", p.x + 16f, p.y - 8f, 12.dp.toPx(), Color.White)
             }
 
             // shot -> receiver rays
@@ -465,37 +498,23 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.MAP,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.MAP) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 5),
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
                 ) { Text("Karte") }
-                SegmentedButton(
-                    selected = state.fdtdMode == FdtdPlacementMode.SOURCE,
-                    onClick = { vm.setFdtdMode(FdtdPlacementMode.SOURCE) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 5),
-                ) { Text("Quelle") }
-                SegmentedButton(
-                    selected = state.fdtdMode == FdtdPlacementMode.RECEIVER,
-                    onClick = { vm.setFdtdMode(FdtdPlacementMode.RECEIVER) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 5),
-                ) { Text("Receiver") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.AB,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.AB) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 3, count = 5),
-                ) { Text("Profil") }
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
+                ) { Text("Linie") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.SECTION,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.SECTION) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 4, count = 5),
-                ) { Text("2D") }
+                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                ) { Text("Schnitt") }
             }
             val hint = when (state.fdtdMode) {
-                FdtdPlacementMode.SOURCE -> "Auf Wasser tippen: Quelle setzen (später verschieb- und antippbar)"
-                FdtdPlacementMode.RECEIVER -> "Tippen: Receiver am Meeresboden (mehrere möglich)"
-                FdtdPlacementMode.AB -> "1. Tipp = A, 2. Tipp = B (optional): die Linie steuert den 2D-Schnitt"
+                FdtdPlacementMode.MAP -> "Auf Wasser tippen: Quelle setzen · danach Receiver. Marker ziehen zum Verschieben."
+                FdtdPlacementMode.AB -> "1. Tipp = A, 2. Tipp = B: danach öffnet sich der Schnitt"
                 FdtdPlacementMode.SECTION -> null
-                FdtdPlacementMode.MAP -> if (state.shot == null && state.receivers.isEmpty()) {
-                    "Quelle und Receiver über die Pille setzen, Marker antippen zum Bearbeiten"
-                } else null
             }
             hint?.let {
                 Surface(
@@ -606,12 +625,12 @@ private fun SurveyDock(
             ) {
                 FilterChip(
                     selected = state.shot != null,
-                    onClick = { if (state.shot != null) onEditShot() else vm.setFdtdMode(FdtdPlacementMode.SOURCE) },
+                    onClick = { if (state.shot != null) onEditShot() },
                     label = { Text(if (state.shot == null) "1 · Quelle" else "✓ Quelle") },
                 )
                 FilterChip(
                     selected = state.receivers.isNotEmpty(),
-                    onClick = { if (state.receivers.isEmpty()) vm.setFdtdMode(FdtdPlacementMode.RECEIVER) else onOpenSheet() },
+                    onClick = { if (state.receivers.isNotEmpty()) onOpenSheet() },
                     label = { Text(if (state.receivers.isEmpty()) "2 · Receiver" else "✓ ${state.receivers.size} Rx") },
                 )
                 FilterChip(
@@ -663,10 +682,10 @@ private fun SurveyDock(
 }
 
 private fun nextStep(state: AppUiState): String = when {
-    state.shot == null -> "1. „Quelle“ wählen und auf Wasser tippen"
-    state.receivers.isEmpty() -> "2. „Receiver“ wählen und auf Wasser tippen"
-    state.sediment == null -> "3. „Meeresboden“ laden (einmalig, GlobSed-Datensatz)"
-    else -> "Bereit: im „2D“-Schnitt verfeinern (ziehen/antippbar) oder direkt exportieren"
+    state.shot == null -> "1. In der Karte auf Wasser tippen = Quelle setzen"
+    state.receivers.isEmpty() -> "2. Noch einmal tippen = Receiver (wiederholen für mehr)"
+    state.sediment == null -> "3. Für den Export „Meeresboden“ laden (einmalig) — der 2D-Schnitt geht auch ohne"
+    else -> "Bereit: im Schnitt verfeinern oder exportieren"
 }
 
 // ===========================================================================
@@ -1042,14 +1061,12 @@ private fun SectionEditor(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (curState.sediment == null && !curState.bottomLoading) {
-                    AssistChip(onClick = { curVm.loadBottomType() }, label = { Text("Meeresboden") })
+                    AssistChip(onClick = { curVm.loadBottomType() }, label = { Text("Meeresboden (optional)") })
                 }
-                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.SOURCE) }, label = { Text("Quelle") })
-                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.RECEIVER) }, label = { Text("Receiver") })
                 AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.AB) }, label = { Text("A-B-Linie") })
             }
             Text(
-                "Tipp: mit „Profil“ zwei Punkte (A, B) in der Karte tippen. Der Schnitt folgt dann der Linie und bleibt beim Ziehen stabil.",
+                "Tipp: oben „Linie“ wählen und zwei Punkte tippen (A, dann B): der Schnitt erscheint sofort, auch ohne geladenen Meeresboden.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1141,6 +1158,8 @@ private fun SectionEditor(
                                 when (target) {
                                     is EditTarget.Shot -> onEditShot()
                                     is EditTarget.Rec -> onEditReceiver(target.index)
+                                    // line ends have no editor sheet
+                                    is EditTarget.PointA, is EditTarget.PointB -> {}
                                 }
                             }
                             break
@@ -1153,6 +1172,9 @@ private fun SectionEditor(
                             when (target) {
                                 is EditTarget.Shot -> curVm.moveShot(lon, lat, zM)
                                 is EditTarget.Rec -> curVm.moveReceiver(target.index, lon, lat, zM)
+                                // dragging a line end inside the section: move it in the map too
+                                is EditTarget.PointA -> curVm.movePoint(0, lon, lat)
+                                is EditTarget.PointB -> curVm.movePoint(1, lon, lat)
                             }
                         }
                         dragPos = change.position
@@ -1272,8 +1294,8 @@ private fun SectionEditor(
 
 private fun sectionMissingText(state: AppUiState): String = when {
     state.bottomLoading -> "Meeresbodendaten laden …"
-    state.sediment == null -> "Für den 2D-Schnitt fehlen die Meeresbodendaten (GlobSed, einmaliger Download). Danach genügt eine A-B-Linie für eine Vorschau."
-    state.shot == null && state.receivers.isEmpty() && state.pointA == null -> "Noch nichts platziert: Quelle und Receiver in der Karte antippen, oder eine A-B-Linie ziehen und hier ins Wasser tippen."
+    state.pointA == null && state.shot == null && state.receivers.isEmpty() ->
+        "Noch nichts platziert. Modus „Linie“: zwei Punkte in der Karte tippen (A, dann B): der Schnitt erscheint sofort und geht auch ohne Meeresbodendaten."
     else -> "Schnitt wird berechnet …"
 }
 

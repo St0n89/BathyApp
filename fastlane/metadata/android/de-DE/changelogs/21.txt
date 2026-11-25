@@ -1,0 +1,7 @@
+Survey-UI vereinfacht: ein 2D-Profil in drei Tipps:
+- Statt fünf Modi nur noch drei: Karte, Linie, Schnitt.
+- Linie-Modus: A tippen, B tippen -- die App springt direkt in den 2D-Schnitt. Ein dritter Tipp startet eine neue Linie. A und B sind in der Karte ziehbar.
+- Der Schnitt funktioniert jetzt auch vor dem Sediment-Download: reine Bathymetrie-Vorschau mit hartem Boden; GlobSed wird nur für den env.jl/source.jl-Export gebraucht.
+- Karte-Modus: erster Tipp aufs Wasser setzt die Quelle, weitere Tipps Receiver, jeweils mit Rückgängig-Snackbar.
+- Die Quellen-/Receiver-Chips unten öffnen direkt die Editoren statt Modus-Wechsel; die Schritt-Anleitung erklärt den Ablauf.
+- Der bestehende Schnitt-Editor (im Schnitt ziehen, Editor-Sheets, Exporte) bleibt unverändert.

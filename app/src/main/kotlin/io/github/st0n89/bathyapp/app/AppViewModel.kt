@@ -48,7 +48,7 @@ sealed interface AppScreen {
     data object Profile : AppScreen
 }
 
-enum class FdtdPlacementMode { MAP, AB, SOURCE, RECEIVER, SECTION }
+enum class FdtdPlacementMode { MAP, AB, SECTION }
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Home,
@@ -270,10 +270,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         when {
             st.pointA == null -> st.copy(pointA = doubleArrayOf(lon, lat), profile = null, profileStats = null)
             st.pointB == null -> st.copy(pointB = doubleArrayOf(lon, lat), profile = null, profileStats = null)
-            else -> st.copy(pointB = doubleArrayOf(lon, lat), profile = null, profileStats = null)
+            // A and B set: the next tap starts a new line
+            else -> st.copy(pointA = doubleArrayOf(lon, lat), pointB = null, profile = null, profileStats = null)
         }
     }.also {
         // the A-B pair doubles as the survey line for the 2-D section
+        scheduleFdtdSliceUpdate(0L)
+    }
+
+    /** Drags an existing line end (index 0 = A, 1 = B); ignored if not set. */
+    fun movePoint(index: Int, lon: Double, lat: Double) = update { st ->
+        when {
+            index == 0 && st.pointA != null -> st.copy(pointA = doubleArrayOf(GlobeMath.normLon(lon), GlobeMath.normLat(lat)), profile = null, profileStats = null)
+            index == 1 && st.pointB != null -> st.copy(pointB = doubleArrayOf(GlobeMath.normLon(lon), GlobeMath.normLat(lat)), profile = null, profileStats = null)
+            else -> st
+        }
+    }.also {
         scheduleFdtdSliceUpdate(0L)
     }
 
@@ -712,7 +724,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         sliceJob?.cancel()
         val s = _state.value
         val line = surveyLine()
-        if (s.sediment == null || (s.shot == null && s.receivers.isEmpty() && line == null)) {
+        if (s.shot == null && s.receivers.isEmpty() && line == null) {
             if (s.fdtdSlice != null) update { it.copy(fdtdSlice = null) }
             return
         }
@@ -720,7 +732,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.delay(delayMs)
             val st = _state.value
             val g = st.grid ?: return@launch
-            val sed = st.sediment ?: return@launch
+            // preview works without GlobSed (bathy-only, hard bottom);
+            // the real exports still demand the downloaded grid
+            val sed = st.sediment ?: SedGrid.empty()
             val ln = surveyLine()
             if (st.shot == null && st.receivers.isEmpty() && ln == null) return@launch
             try {

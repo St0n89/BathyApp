@@ -90,6 +90,14 @@ class SedGrid(
 
     companion object {
         /**
+         * Degenerate all-zero grid standing in for "no GlobSed data yet":
+         * every sample returns 0 m (hard bottom), so bathymetry-only 2-D
+         * section previews work before the sediment download. Only the
+         * final env.jl export requires the real GlobSed grid.
+         */
+        fun empty(): SedGrid = SedGrid(2, 2, ShortArray(4), -180.0, 90.0, 360.0, 180.0)
+
+        /**
          * Parses an ESRI ASCII grid (GlobSed layout) straight from a
          * stream. Header keys are scanned from the first bytes; data
          * starts after the header (rows may wrap lines): nx*ny values

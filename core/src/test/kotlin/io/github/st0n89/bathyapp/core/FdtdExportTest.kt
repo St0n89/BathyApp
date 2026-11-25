@@ -354,4 +354,19 @@ class FdtdExportTest {
         // source x from the slice round-trips as the ix Int index
         assertEquals((s.shotXm / s.dx).toInt() + 1, intVar(srcOf(r), "ix"))
     }
+
+    @Test
+    fun emptySedimentGridGivesBathyOnlyProfile() {
+        // SedGrid.empty(): 0 m everywhere -> hard bottom (ROCK) only
+        assertEquals(0.0, SedGrid.empty().sample(5.0, 57.0), 1e-12)
+        assertEquals(0.0, SedGrid.empty().sample(-179.9, -60.0), 1e-12)
+        val s = FdtdExport.slice(waterGrid(), SedGrid.empty(), null, emptyList(), "t", line)
+        assertTrue(s.classes.isNotEmpty())
+        assertEquals(s.plan.nx, s.classes.size)
+        assertEquals(0, s.plan.classCounts[BottomClass.MUD] ?: 0)
+        assertEquals(0, s.plan.classCounts[BottomClass.SAND] ?: 0)
+        assertEquals(s.plan.nx, s.plan.classCounts[BottomClass.ROCK] ?: 0)
+        // sed_base collapses onto the water depth (no sediment band)
+        assertEquals(1000.0, s.sedBase.max(), 1.0)
+    }
 }

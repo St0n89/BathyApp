@@ -1,0 +1,7 @@
+Survey UI simplified: a 2-D profile in three taps:
+- Modes reduced to three: Karte (map), Linie (line), Schnitt (section).
+- Linie mode: tap A, tap B -- the app jumps straight into the 2-D section. A third tap starts a new line. A and B are draggable on the map.
+- The section now works before the sediment download: bathymetry-only preview with hard bottom; GlobSed is only needed for the env.jl/source.jl export.
+- Karte mode smart-place: first tap on water sets the source, further taps add receivers, each with an undo snackbar.
+- Shot/receiver chips in the bottom dock open their editors instead of switching modes; the next-step line explains the flow.
+- The existing section editor (drag in the section, editor sheets, exports) is unchanged.
