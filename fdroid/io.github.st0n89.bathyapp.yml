@@ -43,13 +43,13 @@ Description: |-
 RepoType: git
 Repo: https://github.com/St0n89/BathyApp.git
 Builds:
-  - versionName: 0.13.0
-    versionCode: 21
-    commit: 82ea4c03182892383fd5c542b7fa2ada7db94ad8
+  - versionName: 0.14.0
+    versionCode: 22
+    commit: 635cc29e5b7b6fe3930570ed79ce5db19f1f1f96
     gradle:
       - yes
     output: app/build/outputs/apk/release/app-release.apk
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: 0.13.0
-CurrentVersionCode: 21
+CurrentVersion: 0.14.0
+CurrentVersionCode: 22
