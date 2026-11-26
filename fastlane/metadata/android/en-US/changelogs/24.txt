@@ -1,0 +1,5 @@
+2D section display depth now auto-fits to the actual water depth and marker depths:
+- Previously the section always drew the full model depth (zmax including the PML/vertical buffer, often several hundred meters). For long, shallow corridors almost the whole canvas was empty basement; water column, seafloor and Q/R markers were squeezed into a thin strip at the top.
+- The section now scales its depth axis to the real content (bathymetry, sediment base, source and receiver depths) plus headroom, so shallow surveys are readable again.
+- When the display shows less depth than the model, a small note gives the displayed and model depths. The export is not affected: it keeps the full model depth as before.
+- The fast mode from 0.15.0 is unchanged.

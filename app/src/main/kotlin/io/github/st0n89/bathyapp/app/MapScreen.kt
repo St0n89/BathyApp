@@ -889,7 +889,13 @@ private fun SlicePreview(sl: FdtdSlice, modifier: Modifier = Modifier) {
         val h = size.height
         val n = sl.classes.size
         if (n < 2 || h <= 0f || w <= 0f) return@Canvas
-        val zScale = h / sl.zmaxM.toFloat().coerceAtLeast(0.1f)
+        // Fit display depth to actual content (PML buffer inflates zmaxM).
+        val zContentP = max(
+            max(sl.bathy.max(), sl.sedBase.max()),
+            max(max(1.0, sl.shotDepthM), sl.recDepthM.maxOrNull() ?: 0.0),
+        )
+        val zDispP = (zContentP * 1.3).coerceAtLeast(10.0).coerceAtMost(sl.zmaxM)
+        val zScale = h / zDispP.toFloat().coerceAtLeast(0.1f)
         val step = max(1, n / 480)
 
         // layer bands
@@ -940,7 +946,7 @@ private fun SlicePreview(sl: FdtdSlice, modifier: Modifier = Modifier) {
         val labelPx = 10.dp.toPx()
         drawText("0", 3f, h - 4f, labelPx, Color.White)
         drawText("%.0f km".format(sl.plan.lineLenM / 1000.0), w - 42f, h - 4f, labelPx, Color.White)
-        drawText("%.0f m".format(sl.zmaxM), 3f, labelPx + 2f, labelPx, Color.White)
+        drawText("%.0f m".format(zDispP), 3f, labelPx + 2f, labelPx, Color.White)
     }
 }
 
@@ -1200,6 +1206,18 @@ private fun SectionEditor(
     val n = sl.classes.size
     val totalM = (n - 1) * sl.dx
 
+    // Display depth: fit the actual content (water column, seafloor, Q/R
+    // depths) instead of the full model zmax. For long shallow corridors the
+    // model zmax is dominated by the PML/vertical buffer (hundreds of m),
+    // which squeezed everything real into a few percent of the canvas.
+    // The export stays untouched: env.jl keeps the full zmax.
+    val zContent = max(
+        max(sl.bathy.max(), sl.sedBase.max()),
+        max(max(1.0, sl.shotDepthM), sl.recDepthM.maxOrNull() ?: 0.0),
+    )
+    val zDisp = (zContent * 1.3).coerceAtLeast(10.0).coerceAtMost(sl.zmaxM)
+    val zClipped = zDisp < sl.zmaxM - 0.5
+
     /** lon/lat interpolated between the two bracketing slice columns. */
     fun lonLatAt(xM: Double): Pair<Double, Double> {
         val f = (xM / sl.dx).coerceIn(0.0, (n - 1).toDouble())
@@ -1251,7 +1269,7 @@ private fun SectionEditor(
                     s.shot?.let { sh ->
                         val px = Offset(
                             (xMetersOf(sh.lon, sh.lat) / totalM * w).toFloat(),
-                            (sh.depthM / sl.zmaxM * h).toFloat(),
+                            (sh.depthM / zDisp * h).toFloat(),
                         )
                         if ((px - down.position).getDistance() <= grabPx) tgt = EditTarget.Shot
                     }
@@ -1259,7 +1277,7 @@ private fun SectionEditor(
                         for ((i, r) in s.receivers.withIndex()) {
                             val px = Offset(
                                 (xMetersOf(r.lon, r.lat) / totalM * w).toFloat(),
-                                (r.depthM / sl.zmaxM * h).toFloat(),
+                                (r.depthM / zDisp * h).toFloat(),
                             )
                             if ((px - down.position).getDistance() <= grabPx) {
                                 tgt = EditTarget.Rec(i)
@@ -1290,7 +1308,7 @@ private fun SectionEditor(
                         if (!moved && (change.position - down.position).getDistance() > moveSlopPx) moved = true
                         if (moved) {
                             val xM = (change.position.x / w).coerceIn(0f, 1f) * totalM
-                            val zM = (change.position.y / h).coerceIn(0f, 1f) * sl.zmaxM
+                            val zM = (change.position.y / h).coerceIn(0f, 1f) * zDisp
                             val (lon, lat) = lonLatAt(xM)
                             when (target) {
                                 is EditTarget.Shot -> curVm.moveShot(lon, lat, zM)
@@ -1313,7 +1331,7 @@ private fun SectionEditor(
                     val h = canvasSize.height.toFloat()
                     if (w <= 0f || h <= 0f) return@detectTapGestures
                     val xM = (tap.x / w).coerceIn(0f, 1f) * totalM
-                    val zM = (tap.y / h).coerceIn(0f, 1f) * sl.zmaxM
+                    val zM = (tap.y / h).coerceIn(0f, 1f) * zDisp
                     val (lon, lat) = lonLatAt(xM)
                     if (curState.shot == null) curVm.placeShot(lon, lat, zM) else curVm.addReceiver(lon, lat, zM)
                 }
@@ -1322,7 +1340,7 @@ private fun SectionEditor(
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas
-        val zScale = h / sl.zmaxM.toFloat().coerceAtLeast(0.1f)
+        val zScale = h / zDisp.toFloat().coerceAtLeast(0.1f)
         val step = max(1, n / 720)
 
         // environment bands
@@ -1377,13 +1395,21 @@ private fun SectionEditor(
             drawText("%.0f km".format(sl.plan.lineLenM / 1000.0 * k / 4.0), x - 20f, 14 * labelPx / 11f, labelPx, Color.White.copy(alpha = 0.75f))
             val y = h * k / 4f
             drawLine(Color.White.copy(alpha = 0.12f), Offset(0f, y), Offset(w, y), strokeWidth = 1f)
-            drawText("%.0f m".format(sl.zmaxM * k / 4.0), w - 44f, y - 4f, labelPx, Color.White.copy(alpha = 0.75f))
+            drawText("%.0f m".format(zDisp * k / 4.0), w - 44f, y - 4f, labelPx, Color.White.copy(alpha = 0.75f))
         }
 
         // A/B letters when the section follows a survey line
         if (sl.hasLine) {
             drawText("A", 8f, h - 10f, 13.dp.toPx(), Color.White)
             drawText("B", w - 22f, h - 10f, 13.dp.toPx(), Color.White)
+        }
+
+        // honesty note when the display shows less depth than the model
+        if (zClipped) {
+            drawText(
+                "Anzeige bis %.0f m (Modell %.0f m)".format(zDisp, sl.zmaxM),
+                w - 240f, h - 24f, labelPx, Color.White.copy(alpha = 0.75f),
+            )
         }
 
         // live markers from state (not the slice): they follow the finger instantly
@@ -1409,7 +1435,7 @@ private fun SectionEditor(
             drawLine(Color.White.copy(alpha = 0.55f), Offset(0f, dp.y), Offset(w, dp.y), strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
             drawLine(Color.White.copy(alpha = 0.55f), Offset(dp.x, 0f), Offset(dp.x, h), strokeWidth = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
             val xM = (dp.x / w).coerceIn(0f, 1f) * totalM
-            val zM = (dp.y / h).coerceIn(0f, 1f) * sl.zmaxM
+            val zM = (dp.y / h).coerceIn(0f, 1f) * zDisp
             drawText("x %.1f km · z %.0f m".format(xM / 1000.0, zM), (dp.x + 12f).coerceAtMost(w - 130f), (dp.y - 12f).coerceAtLeast(28f), 12.dp.toPx(), Color.White)
         }
     }

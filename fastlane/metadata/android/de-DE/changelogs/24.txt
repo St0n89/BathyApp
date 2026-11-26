@@ -1,0 +1,5 @@
+2D-Schnitt: Anzeigetiefe passt sich jetzt automatisch an die echte Wassertiefe an:
+- Bisher zeichnete der Schnitt immer die volle Modelltiefe (zmax inklusive PML-/Vertikalpuffer, oft mehrere hundert Meter). Bei langen, flachen Korridoren war dadurch fast die gesamte Fläche leerer Untergrund; Wassersäule, Meeresboden und Q/R-Marker lagen als dünner Streifen ganz oben.
+- Der Schnitt skaliert seine Tiefenachse jetzt auf den echten Inhalt (Bathymetrie, Sedimentbasis, Quellen- und Receivertiefen) plus Reserve, flache Surveys sind damit wieder ablesbar.
+- Wenn weniger Tiefe angezeigt wird als im Modell vorhanden ist, zeigt ein kleiner Hinweis Anzeige- und Modelltiefe an. Der Export bleibt unverändert und nutzt weiterhin die volle Modelltiefe.
+- Der Fast Mode aus 0.15.0 bleibt unverändert.
