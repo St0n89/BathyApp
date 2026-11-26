@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.st0n89.bathyapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.14.0"
+        versionCode = 23
+        versionName = "0.15.0"
     }
 
     signingConfigs {

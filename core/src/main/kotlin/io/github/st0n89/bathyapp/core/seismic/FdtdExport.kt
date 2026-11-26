@@ -81,6 +81,8 @@ data class FdtdSlice(
     /** True when the section follows an explicit A-B survey line. */
     val hasLine: Boolean,
     val plan: FdtdExportPlan,
+    /** True when [dx] is the coarser preview spacing of a fast slice, not the export dx. */
+    val fastSampled: Boolean = false,
 )
 
 /**
@@ -109,6 +111,14 @@ object FdtdExport {
     private const val MAX_NX = 8000
     /** Sizing f0 for preview slices when no source is placed yet (Hz). */
     const val PREVIEW_F0 = 25.0
+    /**
+     * Column budget of a fast preview: the section canvas only draws ~480
+     * columns, so sampling the corridor at export dx (up to 8000 columns,
+     * once per sizing iteration) is wasted work for the live preview. Fast
+     * mode samples the same corridor with ~[FAST_PREVIEW_COLUMNS] columns;
+     * export sizing (dx/nx/nz, the numbers the chips show) stays exact.
+     */
+    const val FAST_PREVIEW_COLUMNS = 512
     private const val EARTH_R_M = Profiler.EARTH_RADIUS_KM * 1000.0
 
     fun build(
@@ -139,13 +149,14 @@ object FdtdExport {
         receivers: List<FdtdReceiver>,
         sourceNote: String,
         line: FdtdLine? = null,
+        fast: Boolean = false,
     ): FdtdSlice {
-        val st = compute(grid, sed, shot, receivers, line)
+        val st = compute(grid, sed, shot, receivers, line, fast)
         return FdtdSlice(
             bathy = st.sl.bathy,
             sedBase = st.sl.sedBase,
             classes = st.sl.classId,
-            dx = st.d.dx,
+            dx = st.sl.dx2,
             zmaxM = st.d.zmax,
             shotXm = st.sourceX ?: -1.0,
             shotDepthM = shot?.depthM ?: 0.0,
@@ -155,6 +166,7 @@ object FdtdExport {
             colLat = st.sl.colLat,
             hasLine = line != null,
             plan = st.plan,
+            fastSampled = fast && st.sl.dx2 > st.d.dx,
         )
     }
 
@@ -174,7 +186,7 @@ object FdtdExport {
         val line: FdtdLine?,
     )
 
-    private fun compute(grid: GeoGrid, sed: SedGrid, shot: FdtdShot?, receivers: List<FdtdReceiver>, line: FdtdLine?): Stage {
+    private fun compute(grid: GeoGrid, sed: SedGrid, shot: FdtdShot?, receivers: List<FdtdReceiver>, line: FdtdLine?, fast: Boolean = false): Stage {
         val hasLine = line != null
         if (!hasLine) {
             require(receivers.isNotEmpty()) { "no receivers placed" }
@@ -298,7 +310,20 @@ object FdtdExport {
         for (iter in 0 until 12) {
             val margin = max(max((PML_CELLS + 8) * dx, 2.0 * BottomClasses.WATER.vp / f0), 500.0)
             val nx = (ceil((lineLen + 2.0 * margin) / dx).toInt() + 1).coerceAtLeast(16)
-            val sl = sampleSlice(grid, sed, oLon, oLat, brg, ang, xStart, margin, dx, nx, farRange)
+            // fast preview: sample the corridor down to display resolution
+            // (~512 columns incl. margins) — the section canvas never draws
+            // more. Sizing below (dx/nx/nz of the export plan) stays exact.
+            val dxSample: Double
+            val nxSample: Int
+            if (fast) {
+                val span = lineLen + 2.0 * margin
+                dxSample = ceil(max(dx, span / FAST_PREVIEW_COLUMNS))
+                nxSample = (ceil(span / dxSample).toInt() + 1).coerceAtLeast(16)
+            } else {
+                dxSample = dx
+                nxSample = nx
+            }
+            val sl = sampleSlice(grid, sed, oLon, oLat, brg, ang, xStart, margin, dxSample, nxSample, farRange)
             val zBuffer = max(max(0.25 * sl.bathyMax, 400.0), (PML_CELLS + 6) * dx)
             val zNeeded = max(
                 max(sl.bathyMax + sl.sedMax + zBuffer, if (receivers.isEmpty()) 0.0 else maxReceiverDepth(receivers) + 4 * dx),

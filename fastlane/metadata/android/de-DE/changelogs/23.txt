@@ -1,0 +1,4 @@
+Schnelle 2D-Schnittdarstellung (Fast Mode):
+- Neue Option „Schnelle Vorschau" für das 2D-Schnitt-Preview. Der Korridor wird mit ca. 512 Spalten anstelle der Export-Auflösung (bis zu 8000 Spalten, je Rasterneuberechnung) gesampelt. Das Schnitt-Preview berechnet sich damit deutlich schneller und hängt beim Verschieben von Quelle, Receivern oder der A-B-Linie nicht mehr nach.
+- Die Zahlen der Planübersicht bleiben exakt. Gittergröße, Zellabstand oder Export sind nicht beeinflusst. Der Export selbst bleibt unverändert und exakt.
+- Umschaltbar über den Filter-Chip „Schnelle Vorschau / Exakte Vorschau" in der Schnittleiste. Nach dem Update ist der Fast Mode aktiv. Die Einstellung bleibt über Neustarts gespeichert.

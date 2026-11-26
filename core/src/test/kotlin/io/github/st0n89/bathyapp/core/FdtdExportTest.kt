@@ -369,4 +369,79 @@ class FdtdExportTest {
         // sed_base collapses onto the water depth (no sediment band)
         assertEquals(1000.0, s.sedBase.max(), 1.0)
     }
+
+    // ---- fast preview ------------------------------------------------------
+
+    /** ~55 km survey line along the equator: exact preview needs nx > 8000-coarsening. */
+    private val longLine = FdtdLine(0.0, 0.0, 0.5, 0.0)
+
+    @Test
+    fun fastPreviewCapsColumnsButKeepsExactPlan() {
+        val grid = waterGrid()
+        val sed = sedGrid()
+        val exact = FdtdExport.slice(grid, sed, null, emptyList(), "t", longLine)
+        val fast = FdtdExport.slice(grid, sed, null, emptyList(), "t", longLine, fast = true)
+
+        // preview arrays are capped at display resolution ...
+        assertTrue("exact slice has thousands of columns", exact.classes.size > 5000)
+        assertTrue(
+            "fast slice caps columns near ${FdtdExport.FAST_PREVIEW_COLUMNS}",
+            fast.classes.size in (FdtdExport.FAST_PREVIEW_COLUMNS - 8)..(FdtdExport.FAST_PREVIEW_COLUMNS + 1),
+        )
+        assertTrue(fast.dx > exact.dx)
+        assertTrue(fast.fastSampled)
+        assertTrue(!exact.fastSampled)
+
+        // ... but the export plan (the numbers the chips show) stays exact
+        assertEquals(exact.plan.dx, fast.plan.dx, 1e-12)
+        assertEquals(exact.plan.nx, fast.plan.nx)
+        assertEquals(exact.plan.nz, fast.plan.nz)
+        assertEquals(exact.plan.zmax, fast.plan.zmax, 1e-9)
+        assertEquals(exact.plan.tmaxHintS, fast.plan.tmaxHintS, 1e-9)
+        assertEquals(exact.plan.warnings, fast.plan.warnings)
+
+        // the corridor is the same: m -> km labels and both ends match
+        val totalM = (fast.classes.size - 1) * fast.dx
+        val exactTotalM = (exact.classes.size - 1) * exact.dx
+        assertEquals(exactTotalM, totalM, 3.0 * fast.dx)
+        assertEquals(0.0, fast.colLon[0], 1e-6)
+        assertEquals(0.5, fast.colLon[fast.colLon.size - 1], 0.005)
+        assertEquals(0.0, fast.colLat[0], 1e-9)
+
+        // sampled depth content is the same constant ocean
+        assertEquals(1000.0, fast.bathy.max(), 1.0)
+        assertEquals(1300.0, fast.sedBase.max(), 1.0)
+    }
+
+    @Test
+    fun fastPreviewShortLineStaysAtExportResolution() {
+        // span < 512 * dx0: display cap never coarsens below the export dx
+        val shortLine = FdtdLine(0.0, 0.0, 0.015, 0.0) // ~1.7 km < 512 * 6 m
+        val fast = FdtdExport.slice(waterGrid(), sedGrid(), null, emptyList(), "t", shortLine, fast = true)
+        val exact = FdtdExport.slice(waterGrid(), sedGrid(), null, emptyList(), "t", shortLine)
+        assertEquals(exact.dx, fast.dx, 1e-12)
+        assertEquals(exact.classes.size, fast.classes.size)
+        assertTrue(!fast.fastSampled)
+        assertEquals(exact.plan, fast.plan)
+    }
+
+    @Test
+    fun fastPreviewPlacesShotAndReceiversConsistently() {
+        // with a line + shot + receiver the fast slice still maps Q/R correctly
+        val grid = waterGrid()
+        val sed = sedGrid()
+        val sh = shot.copy(lon = 0.05)
+        val recs = listOf(FdtdReceiver(0.0, 0.0, 900.0), FdtdReceiver(0.5, 0.0, 900.0))
+        val fast = FdtdExport.slice(grid, sed, sh, recs, "t", longLine, fast = true)
+        val exact = FdtdExport.slice(grid, sed, sh, recs, "t", longLine)
+
+        val totalM = (fast.classes.size - 1) * fast.dx
+        assertTrue(fast.shotXm in 0.0..totalM)
+        for (rx in fast.recXm) assertTrue(rx in 0.0..totalM)
+        // the export plan accepts the same survey the preview drew
+        assertEquals(exact.plan.nx, fast.plan.nx)
+        val exported = FdtdExport.build(grid, sed, sh, recs, "t", longLine)
+        assertEquals(exported.plan.nx, fast.plan.nx)
+        assertEquals(exported.plan.dx, fast.plan.dx, 1e-12)
+    }
 }

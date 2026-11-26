@@ -646,6 +646,31 @@ private fun SurveyDock(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = state.fdtdFast,
+                        onClick = { vm.setFdtdFast(!state.fdtdFast) },
+                        label = {
+                            Text(
+                                if (state.fdtdFast) "Schnelle Vorschau" else "Exakte Vorschau (langsamer)",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                    )
+                    Box(Modifier.weight(1f))
+                    if (state.fdtdSlice?.fastSampled == true) {
+                        Text(
+                            "Vorschau grob, Export exakt",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Button(
                     onClick = onExport,
                     enabled = state.sediment != null && state.shot != null && state.receivers.isNotEmpty(),
@@ -846,9 +871,10 @@ private fun previewMissing(state: AppUiState): String = when {
 private fun planChips(sl: FdtdSlice): String {
     val p = sl.plan
     val c = p.classCounts
-    return "Gitter %dx%d @ %.0f m · Linie %.1f km · max. Tiefe %.0f m · tmax ≈ %.0f s · mud/sand/rock %d/%d/%d".format(
+    return "Gitter %dx%d @ %.0f m · Linie %.1f km · max. Tiefe %.0f m · tmax ≈ %.0f s · mud/sand/rock %d/%d/%d%s".format(
         p.nx, p.nz, p.dx, p.lineLenM / 1000.0, p.bathyMaxM, p.tmaxHintS,
         c[BottomClass.MUD] ?: 0, c[BottomClass.SAND] ?: 0, c[BottomClass.ROCK] ?: 0,
+        if (sl.fastSampled) " · Schnellansicht" else "",
     )
 }
 

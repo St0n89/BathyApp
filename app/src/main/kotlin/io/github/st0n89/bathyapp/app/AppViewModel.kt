@@ -86,6 +86,8 @@ data class AppUiState(
     /** Why the slice preview currently cannot be computed (shown, not swallowed). */
     val fdtdSliceNote: String? = null,
     val fdtdPlan: FdtdExportPlan? = null,
+    /** Fast 2-D section preview: corridor sampled at display resolution (export stays exact). */
+    val fdtdFast: Boolean = true,
 )
 
 /** Handle to a local GEBCO-style NetCDF or GeoTIFF bathymetry file. */
@@ -155,6 +157,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (prefs.getBoolean(PREF_SATELLITE_ONLINE, false)) {
             update { it.copy(satelliteOnline = true) }
         }
+        if (!prefs.getBoolean(PREF_FDTD_FAST, true)) {
+            update { it.copy(fdtdFast = false) }
+        }
+    }
+
+    /** Toggles the fast section preview (persisted; exact sampling stays the opt-out). */
+    fun setFdtdFast(on: Boolean) {
+        prefs.edit().putBoolean(PREF_FDTD_FAST, on).apply()
+        update { it.copy(fdtdFast = on) }
+        scheduleFdtdSliceUpdate(0L)
     }
 
     /** Toggles the optional online satellite layer (persisted across restarts). */
@@ -741,7 +753,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val ln = surveyLine()
             if (st.shot == null && st.receivers.isEmpty() && ln == null) return@launch
             try {
-                val sl = FdtdExport.slice(g, sed, st.shot, st.receivers, st.gridNote ?: "BathyApp", ln)
+                val sl = FdtdExport.slice(g, sed, st.shot, st.receivers, st.gridNote ?: "BathyApp", ln, fast = st.fdtdFast)
                 _state.value = _state.value.copy(fdtdSlice = sl, fdtdSliceNote = null)
             } catch (e: IllegalStateException) {
                 // honest failure: report the cause instead of "computing ..." forever
@@ -808,6 +820,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val PREF_SATELLITE_ONLINE = "satellite_online"
+        const val PREF_FDTD_FAST = "fdtd_fast_preview"
         const val DEFAULT_F0 = 25.0
         const val DEFAULT_AMP = 1.0e3
     }

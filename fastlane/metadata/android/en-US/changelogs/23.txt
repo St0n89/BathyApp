@@ -1,0 +1,4 @@
+Fast 2D section preview (fast mode):
+- New optional fast preview for the 2D section. The corridor is sampled at about 512 columns instead of the export resolution (up to 8000 columns per sizing pass), so the live section updates much faster when dragging the source, receivers or the A-B line.
+- The export stays untouched and exact; the preview only draws a coarser corridor. Grid sizing shown in the plan stays exact because it is computed analytically.
+- Toggle via the "Schnelle Vorschau / Exakte Vorschau" chip in the section bar. Fast mode is on by default after the update and the setting persists across restarts.
