@@ -20,13 +20,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -69,6 +72,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -499,33 +503,46 @@ fun MapScreen(vm: AppViewModel, state: AppUiState) {
                     selected = state.fdtdMode == FdtdPlacementMode.MAP,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.MAP) },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
+                    icon = {},
                 ) { Text("Karte") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.AB,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.AB) },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
+                    icon = {},
                 ) { Text("Linie") }
                 SegmentedButton(
                     selected = state.fdtdMode == FdtdPlacementMode.SECTION,
                     onClick = { vm.setFdtdMode(FdtdPlacementMode.SECTION) },
                     shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                    icon = {},
                 ) { Text("Schnitt") }
             }
+            // one short contextual cue per mode; disappears once you no longer need it
             val hint = when (state.fdtdMode) {
-                FdtdPlacementMode.MAP -> "Auf Wasser tippen: Quelle setzen · danach Receiver. Marker ziehen zum Verschieben."
-                FdtdPlacementMode.AB -> "1. Tipp = A, 2. Tipp = B: danach öffnet sich der Schnitt"
+                FdtdPlacementMode.AB -> when {
+                    state.pointA == null -> "Punkt A auf die Karte tippen"
+                    state.pointB == null -> "Punkt B tippen: Schnitt öffnet sich"
+                    else -> "Weiter tippen startet eine neue Linie"
+                }
+                FdtdPlacementMode.MAP -> when {
+                    state.shot == null -> "Auf Wasser tippen: Quelle setzen"
+                    state.receivers.isEmpty() -> "Weitertippen: Receiver setzen"
+                    else -> null
+                }
                 FdtdPlacementMode.SECTION -> null
             }
             hint?.let {
                 Surface(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.padding(top = 6.dp),
                 ) {
                     Text(
                         it,
                         style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        maxLines = 2,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                        maxLines = 1,
                     )
                 }
             }
@@ -611,81 +628,98 @@ private fun SurveyDock(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // next-step guidance line
-            Text(nextStep(state), style = MaterialTheme.typography.labelMedium)
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-            ) {
-                FilterChip(
-                    selected = state.shot != null,
-                    onClick = { if (state.shot != null) onEditShot() },
-                    label = { Text(if (state.shot == null) "1 · Quelle" else "✓ Quelle") },
-                )
-                FilterChip(
-                    selected = state.receivers.isNotEmpty(),
-                    onClick = { if (state.receivers.isNotEmpty()) onOpenSheet() },
-                    label = { Text(if (state.receivers.isEmpty()) "2 · Receiver" else "✓ ${state.receivers.size} Rx") },
-                )
-                FilterChip(
-                    selected = state.sediment != null,
-                    onClick = { if (state.sediment == null) vm.loadBottomType() else onOpenSheet() },
-                    label = {
-                        if (state.bottomLoading) Text("Meeresboden …")
-                        else if (state.sediment == null) Text("3 · Meeresboden") else Text("✓ Sediment")
-                    },
-                )
-                Box(Modifier.weight(1f))
-                TextButton(onClick = onOpenSheet) { Text("Übersicht") }
-            }
-
-            Button(
-                onClick = onExport,
-                enabled = state.sediment != null && state.shot != null && state.receivers.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("env.jl + source.jl exportieren") }
-
-            // colorbar: Land (max) links ... Wasser (min) rechts
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(fmtM(stats.max), style = MaterialTheme.typography.labelSmall)
-                Canvas(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(12.dp)
-                        .padding(horizontal = 6.dp)
+            if (state.fdtdMode == FdtdPlacementMode.SECTION) {
+                // section work surface: compact status (tap for the overview) + one primary action
+                TextButton(
+                    onClick = onOpenSheet,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
                 ) {
-                    val steps = 128
-                    val minDepth = min(0f, stats.min)
-                    val maxDepth = max(0f, stats.max)
-                    for (i in 0 until steps) {
-                        val e = stats.max - (stats.max - stats.min) * i / (steps - 1)
-                        drawRect(
-                            color = Color(Colormap.color(e, minDepth, maxDepth)),
-                            topLeft = Offset(size.width * i / steps, 0f),
-                            size = Size(size.width / steps + 1f, size.height),
-                        )
-                    }
+                    Text(statusSummary(state), style = MaterialTheme.typography.labelMedium)
                 }
-                Text(fmtM(stats.min), style = MaterialTheme.typography.labelSmall)
+                if (state.fdtdSlice == null && state.fdtdSliceNote != null) {
+                    Text(
+                        "Schnitt nicht möglich: ${state.fdtdSliceNote}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(
+                    onClick = onExport,
+                    enabled = state.sediment != null && state.shot != null && state.receivers.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("env.jl + source.jl exportieren") }
+            } else {
+                // map surface: status chips (check = done, grey = pending) + colorbar
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = state.shot != null,
+                        enabled = state.shot != null,
+                        onClick = onEditShot,
+                        label = { Text("Quelle") },
+                    )
+                    FilterChip(
+                        selected = state.receivers.isNotEmpty(),
+                        enabled = state.receivers.isNotEmpty(),
+                        onClick = onOpenSheet,
+                        label = { Text(if (state.receivers.isEmpty()) "Receiver" else "${state.receivers.size} Rx") },
+                    )
+                    FilterChip(
+                        selected = state.sediment != null,
+                        onClick = { if (state.sediment == null) vm.loadBottomType() else onOpenSheet() },
+                        label = { Text(if (state.bottomLoading) "Meeresboden …" else "Meeresboden") },
+                    )
+                    Box(Modifier.weight(1f))
+                    TextButton(onClick = onOpenSheet) { Text("Übersicht") }
+                }
+
+                // colorbar: Land (max) links ... Wasser (min) rechts
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(fmtM(stats.max), style = MaterialTheme.typography.labelSmall)
+                    Canvas(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(12.dp)
+                            .padding(horizontal = 6.dp)
+                    ) {
+                        val steps = 128
+                        val minDepth = min(0f, stats.min)
+                        val maxDepth = max(0f, stats.max)
+                        for (i in 0 until steps) {
+                            val e = stats.max - (stats.max - stats.min) * i / (steps - 1)
+                            drawRect(
+                                color = Color(Colormap.color(e, minDepth, maxDepth)),
+                                topLeft = Offset(size.width * i / steps, 0f),
+                                size = Size(size.width / steps + 1f, size.height),
+                            )
+                        }
+                    }
+                    Text(fmtM(stats.min), style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }
 }
 
-private fun nextStep(state: AppUiState): String = when {
-    state.shot == null -> "1. In der Karte auf Wasser tippen = Quelle setzen"
-    state.receivers.isEmpty() -> "2. Noch einmal tippen = Receiver (wiederholen für mehr)"
-    state.sediment == null -> "3. Für den Export „Meeresboden“ laden (einmalig) — der 2D-Schnitt geht auch ohne"
-    else -> "Bereit: im Schnitt verfeinern oder exportieren"
+/** One-line survey status for the section dock; tapping it opens the overview. */
+private fun statusSummary(state: AppUiState): String {
+    val q = if (state.shot != null) "Quelle ✓" else "Quelle fehlt"
+    val r = if (state.receivers.isEmpty()) "kein Receiver" else "${state.receivers.size} Receiver ✓"
+    val s = when {
+        state.bottomLoading -> "Meeresboden lädt …"
+        state.sediment == null -> "Meeresboden fehlt"
+        else -> "Sediment ✓"
+    }
+    return "$q · $r · $s"
 }
 
 // ===========================================================================
@@ -1049,27 +1083,90 @@ private fun SectionEditor(
     val curVm by rememberUpdatedState(vm)
 
     if (sl == null || sl.classes.size < 2) {
-        Column(
-            modifier = modifier.padding(horizontal = 20.dp, vertical = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("2D-Schnitt", style = MaterialTheme.typography.titleLarge)
-            Text(
-                sectionMissingText(curState),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (curState.sediment == null && !curState.bottomLoading) {
-                    AssistChip(onClick = { curVm.loadBottomType() }, label = { Text("Meeresboden (optional)") })
+        // hero empty state: icon, headline, one cue, one action; errors are shown, never swallowed
+        val heroFg = MaterialTheme.colorScheme.onSecondaryContainer
+        Box(modifier = modifier) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Canvas(modifier = Modifier.size(84.dp).padding(16.dp)) {
+                        // the survey-line motif: dashed A -> B with end dots
+                        val a = Offset(size.width * 0.12f, size.height * 0.78f)
+                        val b = Offset(size.width * 0.88f, size.height * 0.22f)
+                        drawLine(
+                            color = heroFg,
+                            start = a,
+                            end = b,
+                            strokeWidth = 5f,
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                        )
+                        drawCircle(heroFg, radius = 9f, center = a)
+                        drawCircle(heroFg, radius = 9f, center = b)
+                    }
                 }
-                AssistChip(onClick = { curVm.setFdtdMode(FdtdPlacementMode.AB) }, label = { Text("A-B-Linie") })
+                Text("2D-Schnitt", style = MaterialTheme.typography.headlineMedium)
+                val note = curState.fdtdSliceNote
+                when {
+                    note != null -> {
+                        Text(
+                            "Schnitt kann nicht berechnet werden",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                curVm.setFdtdMode(
+                                    if (curState.pointA == null) FdtdPlacementMode.MAP else FdtdPlacementMode.AB
+                                )
+                            },
+                        ) {
+                            Text(if (curState.pointA == null) "In der Karte ansehen" else "Linie ansehen")
+                        }
+                    }
+                    curState.pointA == null && curState.shot == null && curState.receivers.isEmpty() -> {
+                        Text(
+                            "Punkt A tippen, Punkt B tippen: schon erscheint der Schnitt. Und das auch ohne geladenen Meeresboden.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = { curVm.setFdtdMode(FdtdPlacementMode.AB) }) {
+                            Text("Linie zeichnen")
+                        }
+                    }
+                    else -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 3.dp,
+                        )
+                        Text(
+                            "Schnitt wird berechnet …",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (curState.sediment == null && !curState.bottomLoading) {
+                    TextButton(onClick = { curVm.loadBottomType() }) {
+                        Text("Meeresboden laden (nur für den Export nötig)")
+                    }
+                }
             }
-            Text(
-                "Tipp: oben „Linie“ wählen und zwei Punkte tippen (A, dann B): der Schnitt erscheint sofort, auch ohne geladenen Meeresboden.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
         return
     }
@@ -1290,13 +1387,6 @@ private fun SectionEditor(
             drawText("x %.1f km · z %.0f m".format(xM / 1000.0, zM), (dp.x + 12f).coerceAtMost(w - 130f), (dp.y - 12f).coerceAtLeast(28f), 12.dp.toPx(), Color.White)
         }
     }
-}
-
-private fun sectionMissingText(state: AppUiState): String = when {
-    state.bottomLoading -> "Meeresbodendaten laden …"
-    state.pointA == null && state.shot == null && state.receivers.isEmpty() ->
-        "Noch nichts platziert. Modus „Linie“: zwei Punkte in der Karte tippen (A, dann B): der Schnitt erscheint sofort und geht auch ohne Meeresbodendaten."
-    else -> "Schnitt wird berechnet …"
 }
 
 // ===========================================================================

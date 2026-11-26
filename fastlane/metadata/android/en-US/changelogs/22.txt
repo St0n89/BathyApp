@@ -1,0 +1,6 @@
+Survey UI polish and honest failure reporting:
+- The stuck "Schnitt wird berechnet" state is fixed: when the section cannot be computed, the reason is now shown (e.g. source/receiver outside the loaded map area), with a button to jump back to the map or the line.
+- Sections also refresh again after the map view is reloaded while only an A-B line (no source/receivers) is set.
+- Section screen: clear empty state with icon, one line of guidance and one primary button ("Linie zeichnen"); no instruction paragraphs. The bottom bar is reduced to a tappable status line plus the export button.
+- Map screen: the next-step text line is gone; status chips now show plain done/pending states, and the export button moved to the section screen and the overview sheet.
+- Mode row: the checkmark on the selected tab is gone; hints are now short single-line cues that disappear once there is nothing left to explain.

@@ -1,0 +1,6 @@
+Survey-UI-Feinschliff und ehrliche Fehlermeldung:
+- Der hängende „Schnitt wird berechnet …“-Zustand ist behoben: Wenn der Schnitt nicht berechnet werden kann, steht jetzt der Grund da (z. B. Quelle/Receiver außerhalb des geladenen Kartenausschnitts), mit Sprung zurück zur Karte bzw. Linie.
+- Der Schnitt aktualisiert sich jetzt auch nach einem Neuladen des Kartenausschnitts, wenn nur eine A-B-Linie (ohne Quelle/Receiver) gesetzt ist.
+- Schnitt-Ansicht: aufgeräumter Leerzustand mit Icon, einem Hinweis-Satz und einer Hauptaktion („Linie zeichnen“), ohne Anleitungs-Absätze. Die Leiste unten besteht nur noch aus einer antippbaren Statuszeile und dem Export-Button.
+- Karte: die Schritt-für-Schritt-Textzeile ist weg; die Status-Chips zeigen schlicht erledigt/offen, und der Export-Button liegt nur noch im Schnitt und im Übersichts-Sheet.
+- Modus-Leiste: Häkchen im gewählten Tab entfernt; Hinweise sind jetzt kurze einzeilige Stichpunkte und verschwinden, sobald es nichts mehr zu erklären gibt.

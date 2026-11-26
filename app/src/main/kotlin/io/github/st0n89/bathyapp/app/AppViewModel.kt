@@ -83,6 +83,8 @@ data class AppUiState(
     val receivers: List<FdtdReceiver> = emptyList(),
     /** Live 2-D slice preview of the planned FDTD export (debounced). */
     val fdtdSlice: FdtdSlice? = null,
+    /** Why the slice preview currently cannot be computed (shown, not swallowed). */
+    val fdtdSliceNote: String? = null,
     val fdtdPlan: FdtdExportPlan? = null,
 )
 
@@ -355,11 +357,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(
                     loading = false, loadingNote = null, grid = grid, gridNote = note,
                     screen = AppScreen.Map, pointA = null, pointB = null,
-                    profile = null, profileStats = null, fdtdSlice = null,
+                    profile = null, profileStats = null, fdtdSlice = null, fdtdSliceNote = null,
                 )
-                if (_state.value.shot != null && _state.value.receivers.isNotEmpty() && _state.value.sediment != null) {
-                    scheduleFdtdSliceUpdate(0L)
-                }
+                // schedule unconditionally: the internal guard knows whether anything is placed
+                scheduleFdtdSliceUpdate(0L)
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, loadingNote = null, error = e.message ?: e.toString())
             }
@@ -694,7 +695,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun seafloorDepthAt(lon: Double, lat: Double): Double = waterDepthAt(lon, lat).coerceAtLeast(1.0)
 
     fun clearAcquisition() {
-        update { it.copy(shot = null, receivers = emptyList(), fdtdPlan = null, fdtdSlice = null) }
+        update { it.copy(shot = null, receivers = emptyList(), fdtdPlan = null, fdtdSlice = null, fdtdSliceNote = null) }
         sliceJob?.cancel()
     }
 
@@ -725,7 +726,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val s = _state.value
         val line = surveyLine()
         if (s.shot == null && s.receivers.isEmpty() && line == null) {
-            if (s.fdtdSlice != null) update { it.copy(fdtdSlice = null) }
+            if (s.fdtdSlice != null || s.fdtdSliceNote != null) {
+                update { it.copy(fdtdSlice = null, fdtdSliceNote = null) }
+            }
             return
         }
         sliceJob = viewModelScope.launch(Dispatchers.Default) {
@@ -739,10 +742,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (st.shot == null && st.receivers.isEmpty() && ln == null) return@launch
             try {
                 val sl = FdtdExport.slice(g, sed, st.shot, st.receivers, st.gridNote ?: "BathyApp", ln)
-                _state.value = _state.value.copy(fdtdSlice = sl)
-            } catch (_: IllegalArgumentException) {
-                // preview only: keep the last valid slice; export reports the cause
-            } catch (_: IllegalStateException) {
+                _state.value = _state.value.copy(fdtdSlice = sl, fdtdSliceNote = null)
+            } catch (e: IllegalStateException) {
+                // honest failure: report the cause instead of "computing ..." forever
+                _state.value = _state.value.copy(fdtdSliceNote = e.message ?: e.toString())
+            } catch (e: IllegalArgumentException) {
+                _state.value = _state.value.copy(fdtdSliceNote = e.message ?: e.toString())
             }
         }
     }
